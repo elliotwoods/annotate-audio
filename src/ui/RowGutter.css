@@ -1,0 +1,88 @@
+.row-gutter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--row-h);
+  padding: 0 6px 0 8px;
+  background: var(--bg-2);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  overflow: visible;
+}
+
+.row-gutter__icon-wrap,
+.row-gutter__color-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.row-gutter__icon {
+  padding: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.row-gutter__icon:hover:not(:disabled) {
+  background: var(--bg-3);
+  border-color: var(--line-strong);
+}
+
+.row-gutter__name {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 4px 5px;
+  color: var(--text-0);
+  text-overflow: ellipsis;
+}
+.row-gutter__name:hover {
+  border-color: var(--line);
+}
+.row-gutter__name:focus {
+  background: var(--bg-2);
+  border-color: var(--accent);
+}
+
+.row-gutter__swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+  flex: none;
+}
+.row-gutter__swatch:hover {
+  border-color: var(--text-1);
+}
+
+.row-gutter__actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: none;
+}
+
+.row-gutter__reorder,
+.row-gutter__remove {
+  padding: 4px;
+  color: var(--text-2);
+}
+.row-gutter__reorder:hover:not(:disabled) {
+  color: var(--text-0);
+}
+.row-gutter__remove:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+/* Track / Section gutters read as pinned: no action cluster, slightly dimmer. */
+.row-gutter--track,
+.row-gutter--section {
+  background: var(--bg-1);
+}

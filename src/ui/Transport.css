@@ -1,0 +1,102 @@
+/* Bottom transport bar (spec §11 / §14). Fixed height, single horizontal row. */
+
+.transport {
+  height: var(--transport-h);
+  flex: 0 0 var(--transport-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+  user-select: none;
+  overflow: hidden;
+}
+
+.transport-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Larger hit targets than the global button default. */
+.transport-btn {
+  min-height: 34px;
+  min-width: 34px;
+}
+
+.transport-btn.icon {
+  padding: 7px;
+}
+
+/* Play/Pause is the primary action — give it the accent treatment. */
+.transport-play {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.transport-play:hover:not(:disabled) {
+  background: var(--accent-hi);
+  border-color: var(--accent-hi);
+}
+.transport-play:active:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.transport-jump span {
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* Time readout: two stacked-ish values on one line, monospace tabular. */
+.transport-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.transport-bars {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-0);
+  min-width: 4.5ch;
+  text-align: right;
+}
+
+.transport-readout-sep {
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.transport-clock {
+  font-size: 14px;
+  color: var(--text-1);
+  min-width: 9ch;
+}
+
+/* Snap / labelled field. */
+.transport-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.transport-field-label {
+  color: var(--text-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.transport-field select {
+  min-height: 32px;
+}
+
+.transport-follow span {
+  font-size: 12px;
+  line-height: 1;
+}

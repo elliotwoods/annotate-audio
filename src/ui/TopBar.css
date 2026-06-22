@@ -1,0 +1,58 @@
+/* TopBar — horizontal strip of project/file controls + grid controls (spec §14). */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+}
+
+.topbar-name {
+  flex: 0 0 auto;
+  width: 180px;
+  font-weight: 600;
+  background: var(--bg-2);
+}
+
+.topbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.topbar-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 1 auto;
+  max-width: 420px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 16%, var(--bg-1));
+  border: 1px solid var(--danger);
+  color: var(--text-0);
+  font-size: 12px;
+}
+
+.topbar-error > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-error > svg {
+  color: var(--danger);
+  flex: 0 0 auto;
+}
+
+.topbar-error-dismiss {
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 6px;
+}

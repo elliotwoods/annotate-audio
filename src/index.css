@@ -1,0 +1,191 @@
+/* ── Design tokens (dark theme by default, spec §14) ───────────────────────── */
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --bg-0: #0b0d12; /* app background */
+  --bg-1: #12151c; /* panels / transport / topbar */
+  --bg-2: #181c25; /* gutter, inputs */
+  --bg-3: #20252f; /* raised / hover */
+  --bg-4: #2a303c; /* active / pressed */
+
+  /* lines */
+  --line: #2a2f3a;
+  --line-strong: #3a4150;
+
+  /* text */
+  --text-0: #e8ebf2; /* primary */
+  --text-1: #aab2c3; /* secondary */
+  --text-2: #6b7484; /* muted / labels */
+
+  /* accent */
+  --accent: #7c5cff;
+  --accent-hi: #957bff;
+  --accent-dim: #5a45b8;
+
+  /* semantic */
+  --danger: #fb5d68;
+  --warn: #fbbf24;
+  --ok: #36d399;
+
+  /* timeline */
+  --waveform: #5b6b8c;
+  --waveform-hi: #7c92c2;
+  --grid-bar: rgba(255, 255, 255, 0.16);
+  --grid-beat: rgba(255, 255, 255, 0.06);
+  --grid-sub: rgba(255, 255, 255, 0.03);
+  --playhead: #ff5470;
+  --ruler-bg: #0e1117;
+
+  /* metrics */
+  --gutter-w: 192px;
+  --topbar-h: 48px;
+  --ruler-h: 26px;
+  --waveform-h: 96px;
+  --transport-h: 56px;
+  --row-h: 44px;
+  --radius: 7px;
+  --radius-sm: 4px;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-family: var(--sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--text-0);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 5px 9px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+button:hover:not(:disabled) {
+  background: var(--bg-3);
+  border-color: var(--line-strong);
+}
+button:active:not(:disabled) {
+  background: var(--bg-4);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hi);
+  border-color: var(--accent-hi);
+}
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+button.ghost:hover:not(:disabled) {
+  background: var(--bg-3);
+}
+button.icon {
+  padding: 5px;
+  justify-content: center;
+}
+button.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+input,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--text-0);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 4px 7px;
+}
+input:focus,
+select:focus,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+input[type='number'] {
+  width: 64px;
+}
+
+label {
+  color: var(--text-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-4);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+  margin: 6px 2px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.muted {
+  color: var(--text-2);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}

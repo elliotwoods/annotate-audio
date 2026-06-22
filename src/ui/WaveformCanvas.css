@@ -1,0 +1,20 @@
+/* WaveformCanvas — summed-mono peak strip + faint grid, drawn on a DPR-scaled canvas. */
+.waveform-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.waveform-canvas {
+  display: block;
+}
+.waveform-canvas-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  font-size: 12px;
+  pointer-events: none;
+  user-select: none;
+}

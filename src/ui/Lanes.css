@@ -1,0 +1,97 @@
+.lanes {
+  display: flex;
+  flex-direction: column;
+}
+
+.lanes__strip {
+  display: grid;
+  grid-template-columns: var(--gutter-w) 1fr;
+}
+
+.lanes__lane {
+  position: relative;
+  overflow: hidden;
+  height: var(--row-h);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-0);
+}
+.lanes__lane--cue {
+  cursor: crosshair;
+}
+.lanes__lane--section {
+  cursor: crosshair;
+  background: var(--bg-1);
+}
+.lanes__lane--track {
+  background: var(--bg-1);
+}
+
+/* live drag-create preview rectangle */
+.lanes__preview {
+  position: absolute;
+  top: 5px;
+  height: calc(var(--row-h) - 12px);
+  border: 1px dashed;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+  z-index: 6;
+}
+
+/* ── Track bar ────────────────────────────────────────────────────────────── */
+.track-bar {
+  position: absolute;
+  top: 6px;
+  height: calc(var(--row-h) - 14px);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--waveform);
+  border-radius: var(--radius-sm);
+  background: rgba(91, 107, 140, 0.22);
+  overflow: hidden;
+  pointer-events: none;
+}
+.track-bar--empty {
+  left: 8px;
+  right: 8px;
+  border-style: dashed;
+  border-color: var(--line-strong);
+  background: transparent;
+  opacity: 0.6;
+}
+.track-bar__label {
+  font-size: 12px;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: sticky;
+  left: 0;
+}
+
+/* ── Add-row footer ───────────────────────────────────────────────────────── */
+.lanes__addrow {
+  display: grid;
+  grid-template-columns: var(--gutter-w) 1fr;
+  height: var(--row-h);
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+}
+.lanes__addrow-btn {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  height: 100%;
+  padding-left: 8px;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: none;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+}
+.lanes__addrow-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--bg-3);
+}

@@ -1,0 +1,115 @@
+.timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-0);
+}
+
+.tl-strip {
+  display: grid;
+  grid-template-columns: var(--gutter-w) 1fr;
+  flex: none;
+  border-bottom: 1px solid var(--line);
+}
+
+.tl-corner {
+  background: var(--bg-1);
+  border-right: 1px solid var(--line);
+}
+
+.tl-gutter-label {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  height: var(--waveform-h);
+  background: var(--bg-1);
+  border-right: 1px solid var(--line);
+  color: var(--text-1);
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tl-lane {
+  position: relative;
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.tl-lanes {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Always reserve the vertical-scrollbar gutter so the lane width doesn't jump (and
+     diverge from the ruler/waveform) as rows cross the overflow threshold. */
+  scrollbar-gutter: stable;
+}
+
+/* Zero-height width probe sharing the per-row 2-col layout; its lane cell is measured. */
+.tl-measure {
+  display: grid;
+  grid-template-columns: var(--gutter-w) 1fr;
+  height: 0;
+  overflow: hidden;
+}
+
+.tl-hscroll {
+  position: relative;
+  flex: none;
+  height: 12px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+}
+.tl-hscroll.empty {
+  pointer-events: none;
+  opacity: 0.4;
+}
+.tl-hscroll-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  min-width: 24px;
+  background: var(--bg-4);
+  border-radius: 6px;
+  cursor: grab;
+}
+.tl-hscroll-thumb:active {
+  cursor: grabbing;
+  background: var(--accent-dim);
+}
+
+/* Playhead overlay spans ruler → lanes (left of the hscroll), clipped to the lane area. */
+.playhead-clip {
+  position: absolute;
+  top: 0;
+  bottom: 12px; /* leave the hscroll visible */
+  left: var(--gutter-w);
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 5;
+}
+.playhead-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--playhead);
+  box-shadow: 0 0 6px rgba(255, 84, 112, 0.6);
+  will-change: transform;
+}
+.playhead-head {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  width: 10px;
+  height: 8px;
+  background: var(--playhead);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}

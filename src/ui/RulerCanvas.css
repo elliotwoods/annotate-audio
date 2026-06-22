@@ -1,0 +1,5 @@
+/* RulerCanvas — bars:beats tick strip drawn on a DPR-scaled canvas. */
+.ruler-canvas {
+  display: block;
+  background: var(--ruler-bg);
+}

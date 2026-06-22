@@ -1,0 +1,141 @@
+/* ── Ranged block ──────────────────────────────────────────────────────────── */
+.block-view {
+  position: absolute;
+  top: 5px;
+  height: calc(var(--row-h) - 12px);
+  display: flex;
+  align-items: center;
+  border: 1px solid;
+  border-radius: var(--radius-sm);
+  cursor: grab;
+  overflow: hidden;
+  user-select: none;
+  box-sizing: border-box;
+}
+.block-view:active {
+  cursor: grabbing;
+}
+.block-view.selected {
+  border-width: 1.5px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.35);
+  z-index: 3;
+}
+
+.block-view__label {
+  flex: 1;
+  min-width: 0;
+  padding: 0 6px;
+  color: var(--text-0);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.block-view__label-input {
+  flex: 1;
+  min-width: 0;
+  margin: 0 3px;
+  padding: 1px 4px;
+  height: calc(100% - 6px);
+  font-size: 12px;
+  background: var(--bg-0);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text-0);
+}
+
+.block-view__handle {
+  position: absolute;
+  top: 0;
+  width: 7px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 4;
+  background: rgba(255, 255, 255, 0.001); /* hit area */
+}
+.block-view__handle::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  height: 60%;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 1px;
+}
+.block-view__handle--start {
+  left: 0;
+}
+.block-view__handle--start::after {
+  left: 2px;
+}
+.block-view__handle--end {
+  right: 0;
+}
+.block-view__handle--end::after {
+  right: 2px;
+}
+
+/* ── Point cue (distinct marker) ─────────────────────────────────────────────── */
+.point-cue {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transform: translateX(-50%); /* centre the marker on its start time */
+  cursor: pointer;
+  user-select: none;
+  z-index: 2;
+}
+.point-cue.selected {
+  z-index: 5;
+}
+
+.point-cue__diamond {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  transform: rotate(45deg);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.point-cue.selected .point-cue__diamond {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25);
+}
+
+.point-cue__label {
+  font-size: 11px;
+  color: var(--text-1);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Drag-handle shown on a selected point cue to pull it out into a ranged block. */
+.point-cue__expand {
+  width: 7px;
+  height: 14px;
+  flex: none;
+  border: 1px dashed;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: ew-resize;
+  opacity: 0.85;
+}
+.point-cue__expand:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.point-cue__editor {
+  display: flex;
+  align-items: center;
+}
+.point-cue__editor .block-view__label-input {
+  width: 110px;
+  height: 20px;
+}

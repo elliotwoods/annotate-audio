@@ -1,0 +1,55 @@
+/* BpmControls — manual grid fields (spec §7.3): BPM, offset, time-sig, tap tempo. */
+.bpm-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.bpm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.bpm-field > label {
+  line-height: 1;
+}
+
+.bpm-offset-row,
+.bpm-timesig,
+.bpm-tap-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.bpm-offset-input {
+  width: 78px;
+}
+
+.bpm-offset-row button.icon {
+  font-size: 11px;
+  padding: 5px 6px;
+}
+
+.bpm-timesig-input {
+  width: 44px;
+  text-align: center;
+}
+
+.bpm-timesig-sep {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.bpm-tap {
+  min-width: 64px;
+}
+
+.bpm-tap-estimate {
+  min-width: 78px;
+  color: var(--text-1);
+  font-size: 12px;
+  text-align: center;
+}

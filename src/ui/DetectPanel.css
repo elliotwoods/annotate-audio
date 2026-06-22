@@ -1,0 +1,88 @@
+/* DetectPanel — auto BPM suggestion + reliability caveat + AGPL note (spec §7.1/§7.2). */
+.detect-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 0 0 auto;
+  max-width: 360px;
+}
+
+.detect-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detect-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.detect-est {
+  color: var(--text-0);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.detect-agreement {
+  font-size: 11px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detect-candidate {
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
+.detect-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--danger);
+  font-size: 12px;
+  max-width: 240px;
+}
+
+.detect-error > svg {
+  flex: 0 0 auto;
+}
+
+.detect-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.detect-caveat {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--warn);
+  font-size: 10.5px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.detect-caveat > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.detect-license {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.detect-spin {
+  animation: detect-spin 0.9s linear infinite;
+}
+
+@keyframes detect-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
