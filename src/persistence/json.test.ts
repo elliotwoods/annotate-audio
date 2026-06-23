@@ -60,4 +60,45 @@ describe('validateProject', () => {
     expect(() => validateProject(null)).toThrow();
     expect(() => validateProject('nope')).toThrow();
   });
+
+  it('round-trips a group and its nested cue (parentId + collapsed preserved)', () => {
+    const raw = validRaw();
+    const cue = raw.rows.find((r) => r.kind === 'cue')!;
+    raw.rows.push({
+      id: 'grp',
+      kind: 'group',
+      name: 'Lighting',
+      icon: 'folder',
+      color: '#7C5CFF',
+      order: 9,
+      parentId: null,
+      collapsed: true,
+    });
+    cue.parentId = 'grp'; // nest the existing cue under the group
+    cue.prepCue = 'Wash at 30%';
+    const out = validateProject(JSON.parse(JSON.stringify(raw)));
+    const g = out.rows.find((r) => r.id === 'grp')!;
+    expect(g.kind).toBe('group');
+    expect(g.collapsed).toBe(true);
+    const restored = out.rows.find((r) => r.id === cue.id)!;
+    expect(restored.parentId).toBe('grp');
+    expect(restored.prepCue).toBe('Wash at 30%'); // prep cue round-trips
+  });
+
+  it('back-fills parentId/collapsed for pre-groups projects', () => {
+    const raw = validRaw() as unknown as { rows: Array<Record<string, unknown>> };
+    for (const r of raw.rows) {
+      delete r.parentId;
+      delete r.collapsed;
+    }
+    const out = validateProject(raw);
+    expect(out.rows.every((r) => r.parentId === null)).toBe(true);
+  });
+
+  it('repairs a dangling parentId on import', () => {
+    const raw = validRaw();
+    raw.rows.find((r) => r.kind === 'cue')!.parentId = 'ghost';
+    const out = validateProject(JSON.parse(JSON.stringify(raw)));
+    expect(out.rows.find((r) => r.kind === 'cue')!.parentId).toBeNull();
+  });
 });

@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useStore, undo, redo, beginHistoryGroup, endHistoryGroup, clearHistory } from './store';
+import {
+  useStore,
+  undo,
+  redo,
+  beginHistoryGroup,
+  endHistoryGroup,
+  clearHistory,
+  applyRemoteCoreNoHistory,
+  temporalStore,
+} from './store';
 
 const s = () => useStore.getState();
 function rowsByKind(kind: string) {
@@ -90,6 +99,30 @@ describe('blocks', () => {
     expect(b.end).toBe(4);
   });
 
+  it('resizing a ranged cue to zero duration converts it to a milestone', () => {
+    const cue = rowsByKind('cue')[0];
+    const id = s().addBlock(cue.id, 4, 6);
+    s().resizeBlock(id, 'end', 4); // drag the end back to the start
+    const b = s().core.blocks.find((x) => x.id === id)!;
+    expect(b.isPoint).toBe(true);
+    expect(b.start).toBe(b.end);
+  });
+
+  it('moveBlock can move a cue to another cue/section row, but not a track/group', () => {
+    const a = rowsByKind('cue')[0].id;
+    const other = s().addCueRow();
+    const id = s().addBlock(a, 1, 2);
+    s().moveBlock(id, 1, other);
+    expect(s().core.blocks.find((x) => x.id === id)!.rowId).toBe(other);
+    // a track row is not a block lane → rejected (stays on `other`)
+    s().moveBlock(id, 1, rowsByKind('track')[0].id);
+    expect(s().core.blocks.find((x) => x.id === id)!.rowId).toBe(other);
+    // the section row is a block lane → allowed
+    const section = rowsByKind('section')[0].id;
+    s().moveBlock(id, 1, section);
+    expect(s().core.blocks.find((x) => x.id === id)!.rowId).toBe(section);
+  });
+
   it('resnapAllToGrid pulls blocks onto the grid', () => {
     const cue = rowsByKind('cue')[0];
     // grid: 120bpm, 4/4, offset 0 → bar = 2s. snap=bar by default.
@@ -149,6 +182,136 @@ describe('undo / redo (zundo)', () => {
   });
 });
 
+describe('row groups (folders)', () => {
+  const rowById = (id: string) => s().core.rows.find((r) => r.id === id)!;
+
+  it('addGroup creates a top-level group with order >= 2', () => {
+    const g = s().addGroup();
+    expect(rowById(g).kind).toBe('group');
+    expect(rowById(g).parentId).toBeNull();
+    expect(rowById(g).order).toBeGreaterThanOrEqual(2);
+  });
+
+  it('setParent moves a cue into a group; rejects moving fixed rows', () => {
+    const g = s().addGroup();
+    const cue = rowsByKind('cue')[0].id;
+    s().setParent(cue, g);
+    expect(rowById(cue).parentId).toBe(g);
+
+    const track = rowsByKind('track')[0].id;
+    s().setParent(track, g);
+    expect(rowById(track).parentId).toBeNull(); // fixed rows can't be nested
+  });
+
+  it('setParent rejects creating a cycle (group into its own descendant)', () => {
+    const outer = s().addGroup();
+    const inner = s().addGroup();
+    s().setParent(inner, outer); // inner now child of outer
+    s().setParent(outer, inner); // would create a cycle → rejected
+    expect(rowById(outer).parentId).toBeNull();
+    expect(rowById(inner).parentId).toBe(outer);
+  });
+
+  it('moveRow only reorders within the same parent', () => {
+    const g = s().addGroup();
+    const c1 = s().addCueRow(g);
+    const c2 = s().addCueRow(g);
+    expect(rowById(c1).order).toBeLessThan(rowById(c2).order);
+    s().moveRow(c2, -1);
+    expect(rowById(c2).order).toBeLessThan(rowById(c1).order);
+    expect(rowById(c1).parentId).toBe(g);
+    expect(rowById(c2).parentId).toBe(g);
+  });
+
+  it('toggleCollapse flips the group collapsed flag', () => {
+    const g = s().addGroup();
+    expect(rowById(g).collapsed).toBe(false);
+    s().toggleCollapse(g);
+    expect(rowById(g).collapsed).toBe(true);
+  });
+
+  it('removeGroup delete removes the subtree + its blocks + prunes selection', () => {
+    const g = s().addGroup();
+    const cue = s().addCueRow(g);
+    const blockId = s().addBlock(cue, 1, 2); // selects it
+    expect(s().selection).toContain(blockId);
+    s().removeGroup(g, 'delete');
+    expect(s().core.rows.find((r) => r.id === g)).toBeUndefined();
+    expect(s().core.rows.find((r) => r.id === cue)).toBeUndefined();
+    expect(s().core.blocks.find((b) => b.id === blockId)).toBeUndefined();
+    expect(s().selection).not.toContain(blockId);
+  });
+
+  it('removeGroup ungroup promotes children and keeps their blocks', () => {
+    const g = s().addGroup();
+    const cue = s().addCueRow(g);
+    const blockId = s().addBlock(cue, 1, 2);
+    s().removeGroup(g, 'ungroup');
+    expect(s().core.rows.find((r) => r.id === g)).toBeUndefined();
+    expect(rowById(cue).parentId).toBeNull(); // promoted to top level
+    expect(s().core.blocks.find((b) => b.id === blockId)).toBeTruthy();
+  });
+
+  it('reordering a group at top level keeps its children attached', () => {
+    const g = s().addGroup();
+    const child = s().addCueRow(g);
+    const sibling = s().addCueRow(); // top-level cue after the group
+    s().reorderSiblings(null, [sibling, g]); // put sibling before the group
+    expect(rowById(sibling).order).toBeLessThan(rowById(g).order);
+    expect(rowById(child).parentId).toBe(g); // subtree intact
+  });
+});
+
+describe('prep cue + column widths', () => {
+  it('updateRow stores a prep cue on a row', () => {
+    const cue = rowsByKind('cue')[0].id;
+    s().updateRow(cue, { prepCue: 'House at 50%, haze on' });
+    expect(s().core.rows.find((r) => r.id === cue)!.prepCue).toBe('House at 50%, haze on');
+  });
+
+  it('setPrepWidth clamps to the allowed range', () => {
+    s().setPrepWidth(99999);
+    expect(s().prepWidth).toBeLessThanOrEqual(440);
+    s().setPrepWidth(1);
+    expect(s().prepWidth).toBeGreaterThanOrEqual(110);
+  });
+});
+
+describe('zoomToSelection', () => {
+  it('frames the selected blocks in the lane width', () => {
+    const cue = rowsByKind('cue')[0];
+    s().setLaneWidth(1000);
+    const id = s().addBlock(cue.id, 10, 20); // span 10s, selected by addBlock
+    s().setSelection([id]);
+    s().zoomToSelection();
+    const v = s().view;
+    // span 10s + 8% pad each side = 11.6s visible across 1000px → ~86 px/s
+    expect(v.pixelsPerSecond).toBeGreaterThan(70);
+    expect(v.pixelsPerSecond).toBeLessThan(100);
+    // left edge sits a little before the block start
+    expect(v.scrollSec).toBeGreaterThan(9);
+    expect(v.scrollSec).toBeLessThan(10);
+  });
+
+  it('frames a zero-length point cue without infinite zoom', () => {
+    const cue = rowsByKind('cue')[0];
+    s().setLaneWidth(1000);
+    const id = s().addPointCue(cue.id, 30);
+    s().setSelection([id]);
+    s().zoomToSelection();
+    expect(Number.isFinite(s().view.pixelsPerSecond)).toBe(true);
+    expect(s().view.pixelsPerSecond).toBeLessThanOrEqual(4000);
+    expect(s().view.scrollSec).toBeLessThan(30); // centred-ish around the point
+  });
+
+  it('is a no-op with no selection', () => {
+    const before = s().view;
+    s().clearSelection();
+    s().zoomToSelection();
+    expect(s().view).toBe(before);
+  });
+});
+
 describe('exportProject is pure', () => {
   it('does not mutate core when called (no autosave feedback loop)', () => {
     const before = s().core;
@@ -156,5 +319,58 @@ describe('exportProject is pure', () => {
     expect(s().core).toBe(before); // same reference → no mutation
     expect(p.view).toEqual(s().view);
     expect(p.schemaVersion).toBe(1);
+  });
+});
+
+describe('collaborative apply (applyRemoteCore)', () => {
+  it('applies a remote core without adding to local undo history', () => {
+    const cue = rowsByKind('cue')[0];
+    s().addBlock(cue.id, 1, 2);
+    clearHistory();
+    expect(temporalStore.getState().pastStates).toHaveLength(0);
+
+    const remoteBlock = { ...s().core.blocks[0], id: 'remote-block-1', start: 5, end: 6 };
+    const remote = {
+      ...s().core,
+      blocks: [...s().core.blocks, remoteBlock],
+      updatedAt: s().core.updatedAt + 1000,
+    };
+    applyRemoteCoreNoHistory(remote);
+
+    expect(s().core.blocks).toHaveLength(2); // remote edit applied
+    expect(temporalStore.getState().pastStates).toHaveLength(0); // but not undoable
+  });
+
+  it('leaves the local view untouched when applying a remote core', () => {
+    s().setScrollSec(42);
+    s().setPixelsPerSecond(123);
+    const remote = { ...s().core, name: 'Renamed remotely', updatedAt: s().core.updatedAt + 1000 };
+    applyRemoteCoreNoHistory(remote);
+
+    expect(s().core.name).toBe('Renamed remotely');
+    expect(s().view.scrollSec).toBe(42); // local view preserved
+    expect(s().view.pixelsPerSecond).toBe(123);
+  });
+
+  it('prunes selection to blocks that still exist after a remote apply', () => {
+    const cue = rowsByKind('cue')[0];
+    const id = s().addBlock(cue.id, 1, 2); // addBlock selects it
+    expect(s().selection).toEqual([id]);
+
+    const remote = { ...s().core, blocks: [], updatedAt: s().core.updatedAt + 1000 };
+    applyRemoteCoreNoHistory(remote);
+
+    expect(s().selection).toEqual([]); // selected block is gone → dropped
+  });
+
+  it('does not let a remote apply resume undo tracking if it was paused', () => {
+    // Mid-gesture (tracking paused), an inbound remote edit must not re-enable recording.
+    beginHistoryGroup();
+    expect(temporalStore.getState().isTracking).toBe(false);
+    const remote = { ...s().core, name: 'During gesture', updatedAt: s().core.updatedAt + 1 };
+    applyRemoteCoreNoHistory(remote);
+    expect(temporalStore.getState().isTracking).toBe(false); // still paused
+    endHistoryGroup();
+    expect(temporalStore.getState().isTracking).toBe(true);
   });
 });

@@ -4,6 +4,7 @@ import { useView, useGrid, useSnap } from '../store/selectors';
 import { useStore, beginHistoryGroup, endHistoryGroup } from '../store/store';
 import { snapTime } from '../core/grid';
 import { timeToX } from '../core/transform';
+import { blockHeightForLabel, labelLineCount } from './metrics';
 import './BlockView.css';
 
 export interface BlockViewProps {
@@ -11,10 +12,13 @@ export interface BlockViewProps {
   /** Row colour (hex) used to tint the block. */
   color: string;
   selected: boolean;
+  /** Report the pixel height this block needs while editing (so the row grows live). */
+  onEditHeight?: (px: number) => void;
 }
 
 /** Minimum on-screen width for a ranged block so it stays grabbable. */
 const MIN_WIDTH_PX = 2;
+const MAX_EDIT_ROWS = 10;
 
 type DragKind = 'move' | 'start' | 'end';
 
@@ -24,11 +28,10 @@ interface DragState {
   startClientX: number;
   origStart: number;
   origEnd: number;
-  /** Whether a history group has been opened (only once the pointer actually moves). */
   grouped: boolean;
 }
 
-export function BlockView({ block, color, selected }: BlockViewProps): JSX.Element {
+export function BlockView({ block, color, selected, onEditHeight }: BlockViewProps): JSX.Element {
   const view = useView();
   const grid = useGrid();
   const snap = useSnap();
@@ -41,16 +44,14 @@ export function BlockView({ block, color, selected }: BlockViewProps): JSX.Eleme
   const drag = useRef<DragState | null>(null);
   const [editing, setEditing] = useState(false);
   const [draftLabel, setDraftLabel] = useState(block.label);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Latest values for use inside pointer handlers without stale closures.
   const liveRef = useRef({ view, grid, snap });
   liveRef.current = { view, grid, snap };
 
   useEffect(() => {
     if (editing) {
       setDraftLabel(block.label);
-      // focus + select after the input mounts
       requestAnimationFrame(() => {
         inputRef.current?.focus();
         inputRef.current?.select();
@@ -58,23 +59,28 @@ export function BlockView({ block, color, selected }: BlockViewProps): JSX.Eleme
     }
   }, [editing, block.label]);
 
+  // While editing, report the height needed for the draft so the row grows live; reset
+  // to 0 when not editing (or on unmount). The committed label drives the row otherwise.
+  useEffect(() => {
+    if (editing) onEditHeight?.(blockHeightForLabel(draftLabel));
+    else onEditHeight?.(0);
+    return () => onEditHeight?.(0);
+  }, [editing, draftLabel, onEditHeight]);
+
   const left = timeToX(block.start, view);
   const rawWidth = (block.end - block.start) * view.pixelsPerSecond;
   const width = Math.max(MIN_WIDTH_PX, rawWidth);
+  const ownHeight = blockHeightForLabel(editing ? draftLabel : block.label);
 
   const maybeSnap = (t: number, altKey: boolean): number =>
     altKey ? t : snapTime(t, liveRef.current.grid, liveRef.current.snap);
 
   const captureElRef = useRef<Element | null>(null);
 
-  // Stable handler instances (so add/removeEventListener pair correctly across the
-  // re-renders triggered mid-drag). They read mutable refs for current state.
   const handlersRef = useRef({
     move(e: PointerEvent) {
       const d = drag.current;
       if (!d) return;
-      // Only open the undo group once the pointer actually moves, so a plain
-      // click-to-select doesn't push a no-op history entry.
       if (!d.grouped && Math.abs(e.clientX - d.startClientX) <= 2) return;
       if (!d.grouped) {
         beginHistoryGroup();
@@ -83,7 +89,10 @@ export function BlockView({ block, color, selected }: BlockViewProps): JSX.Eleme
       const pps = liveRef.current.view.pixelsPerSecond;
       const dxSec = (e.clientX - d.startClientX) / pps;
       if (d.kind === 'move') {
-        moveBlock(d.id, maybeSnap(d.origStart + dxSec, e.altKey));
+        // Horizontal move + optional vertical move to whichever cue/section lane the
+        // pointer is over (drag a cue between tracks).
+        const newStart = maybeSnap(d.origStart + dxSec, e.altKey);
+        moveBlock(d.id, newStart, rowIdUnderPointer(e.clientX, e.clientY));
       } else if (d.kind === 'start') {
         resizeBlock(d.id, 'start', maybeSnap(d.origStart + dxSec, e.altKey));
       } else {
@@ -124,16 +133,11 @@ export function BlockView({ block, color, selected }: BlockViewProps): JSX.Eleme
 
   const onBodyPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || editing) return;
-    // Select on press (additive with Shift) before the drag begins.
     selectBlock(block.id, e.shiftKey);
     beginDrag('move', e);
   };
 
-  const onBodyClick = (e: React.MouseEvent) => {
-    // Selection happens on pointerdown; here we only stop the click from bubbling to
-    // the lane (which would otherwise clear the selection).
-    e.stopPropagation();
-  };
+  const onBodyClick = (e: React.MouseEvent) => e.stopPropagation();
 
   const onDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -149,41 +153,41 @@ export function BlockView({ block, color, selected }: BlockViewProps): JSX.Eleme
     setEditing(false);
   };
 
-  const labelInput = editing ? (
-    <input
+  const labelEditor = editing ? (
+    <textarea
       ref={inputRef}
       className="block-view__label-input"
       value={draftLabel}
+      rows={Math.min(Math.max(labelLineCount(draftLabel), 1), MAX_EDIT_ROWS)}
       onChange={(e) => setDraftLabel(e.target.value)}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       onBlur={commitLabel}
       onKeyDown={(e) => {
         e.stopPropagation();
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
-          commitLabel();
+          commitLabel(); // Enter commits; Shift+Enter inserts a newline
         } else if (e.key === 'Escape') {
           e.preventDefault();
           cancelLabel();
         }
       }}
-      aria-label="Block label"
+      aria-label="Cue label (Shift+Enter for a new line)"
     />
   ) : null;
 
   if (block.isPoint) {
-    // Point cue: a diamond marker centred on its start time.
     return (
       <div
-        className={selected ? 'point-cue selected' : 'point-cue'}
+        className={`point-cue${selected ? ' selected' : ''}${editing ? ' editing' : ''}`}
         style={{ left }}
         onPointerDown={onBodyPointerDown}
         onClick={onBodyClick}
         onDoubleClick={onDoubleClick}
         title={block.label || undefined}
         role="button"
-        aria-label={block.label ? `Point cue ${block.label}` : 'Point cue'}
+        aria-label={block.label ? `Milestone ${block.label}` : 'Milestone'}
       >
         <span className="point-cue__diamond" style={{ background: color }} />
         {selected && !editing && (
@@ -193,12 +197,12 @@ export function BlockView({ block, color, selected }: BlockViewProps): JSX.Eleme
             onPointerDown={(e) => beginDrag('end', e)}
             onClick={(e) => e.stopPropagation()}
             onDoubleClick={(e) => e.stopPropagation()}
-            title="Drag right to convert to a ranged block"
-            aria-label="Expand point cue to a range"
+            title="Drag right to give the milestone a duration"
+            aria-label="Expand milestone into a ranged cue"
           />
         )}
         {editing ? (
-          <div className="point-cue__editor">{labelInput}</div>
+          <div className="point-cue__editor">{labelEditor}</div>
         ) : block.label ? (
           <span className="point-cue__label">{block.label}</span>
         ) : null}
@@ -208,10 +212,11 @@ export function BlockView({ block, color, selected }: BlockViewProps): JSX.Eleme
 
   return (
     <div
-      className={selected ? 'block-view selected' : 'block-view'}
+      className={`block-view${selected ? ' selected' : ''}${editing ? ' editing' : ''}`}
       style={{
         left,
         width,
+        height: ownHeight - 10,
         background: hexWithAlpha(color, selected ? 0.42 : 0.26),
         borderColor: color,
       }}
@@ -230,7 +235,7 @@ export function BlockView({ block, color, selected }: BlockViewProps): JSX.Eleme
           onDoubleClick={(e) => e.stopPropagation()}
         />
       )}
-      {editing ? labelInput : <span className="block-view__label">{block.label}</span>}
+      {editing ? labelEditor : <span className="block-view__label">{block.label}</span>}
       {selected && (
         <span
           className="block-view__handle block-view__handle--end"
@@ -241,6 +246,13 @@ export function BlockView({ block, color, selected }: BlockViewProps): JSX.Eleme
       )}
     </div>
   );
+}
+
+/** The cue/section lane row id under a viewport point, or undefined (gutter/track/group). */
+function rowIdUnderPointer(x: number, y: number): string | undefined {
+  const el = document.elementFromPoint(x, y) as Element | null;
+  const lane = el?.closest('[data-lane-rowid]');
+  return lane?.getAttribute('data-lane-rowid') ?? undefined;
 }
 
 /** Convert a #rrggbb / #rgb hex to an rgba() string with the given alpha. */

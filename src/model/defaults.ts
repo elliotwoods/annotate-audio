@@ -37,12 +37,22 @@ export const ROW_PALETTE = [
 export const DEFAULT_CUE_ICON = 'circle';
 export const TRACK_ICON = 'audio-lines';
 export const SECTION_ICON = 'bookmark';
+export const GROUP_ICON = 'folder';
 
 export const TRACK_COLOR = '#5B6172';
 export const SECTION_COLOR = '#94A3B8';
+export const GROUP_COLOR = '#8B93A7';
 
 export function makeTrackRow(name = 'Track'): Row {
-  return { id: uuid(), kind: 'track', name, icon: TRACK_ICON, color: TRACK_COLOR, order: 0 };
+  return {
+    id: uuid(),
+    kind: 'track',
+    name,
+    icon: TRACK_ICON,
+    color: TRACK_COLOR,
+    order: 0,
+    parentId: null,
+  };
 }
 
 export function makeSectionRow(): Row {
@@ -53,10 +63,11 @@ export function makeSectionRow(): Row {
     icon: SECTION_ICON,
     color: SECTION_COLOR,
     order: 1,
+    parentId: null,
   };
 }
 
-export function makeCueRow(order: number, index = 0): Row {
+export function makeCueRow(order: number, index = 0, parentId: string | null = null): Row {
   return {
     id: uuid(),
     kind: 'cue',
@@ -64,6 +75,20 @@ export function makeCueRow(order: number, index = 0): Row {
     icon: DEFAULT_CUE_ICON,
     color: ROW_PALETTE[index % ROW_PALETTE.length],
     order,
+    parentId,
+  };
+}
+
+export function makeGroupRow(order: number, index = 0, parentId: string | null = null): Row {
+  return {
+    id: uuid(),
+    kind: 'group',
+    name: 'Group',
+    icon: GROUP_ICON,
+    color: ROW_PALETTE[index % ROW_PALETTE.length],
+    order,
+    parentId,
+    collapsed: false,
   };
 }
 

@@ -56,3 +56,162 @@
   line-height: 1;
   padding: 2px 6px;
 }
+
+/* Cloud group: view-only pill + transient save confirmation. */
+.topbar-pill {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+}
+
+.topbar-cloud-msg {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+/* Right cluster: per-user output + live status + sharing + account, pinned to the right. */
+.topbar-right {
+  margin-left: auto;
+  gap: 6px;
+}
+
+/* Sound (mute) toggle. */
+.topbar-sound-btn.is-muted {
+  color: var(--danger);
+}
+
+/* Sync-playback toggle. */
+.topbar-sync-btn.active {
+  color: var(--accent-hi);
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-2));
+  border-color: var(--accent);
+}
+
+/* Save/sync status chip. */
+.topbar-savestate {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-savestate.is-saved {
+  color: var(--ok);
+}
+.topbar-savestate svg {
+  flex: 0 0 auto;
+}
+.topbar-savestate .spin {
+  animation: topbar-spin 0.9s linear infinite;
+}
+@keyframes topbar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Live-collaboration pill: a status dot + participant count. */
+.topbar-collab-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+}
+.topbar-collab-pill::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-2);
+  flex: 0 0 auto;
+}
+.topbar-collab-pill.status-open {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+}
+.topbar-collab-pill.status-open::before {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 28%, transparent);
+}
+.topbar-collab-pill.status-connecting {
+  color: var(--warn);
+}
+.topbar-collab-pill.status-connecting::before {
+  background: var(--warn);
+}
+
+/* Load-audio button doubles as a drop target; highlight it while a file is dragged. */
+.topbar-audio.dropping .load-audio-btn {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 26%, var(--bg-2));
+  color: #fff;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* Full-window drop affordance (pointer-events:none so the drop reaches the window). */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 12%, rgba(7, 9, 13, 0.74));
+  backdrop-filter: blur(2px);
+  animation: drop-fade 0.12s ease-out;
+}
+@keyframes drop-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.drop-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 30px 48px;
+  border: 2px dashed color-mix(in srgb, var(--accent) 65%, #fff);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-1));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+.drop-overlay-inner svg {
+  color: var(--accent-hi);
+}
+.drop-overlay-title {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.drop-overlay-sub {
+  font-size: 12px;
+  color: var(--text-2);
+}

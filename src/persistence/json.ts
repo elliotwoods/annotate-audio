@@ -16,6 +16,7 @@ import type {
   ViewState,
 } from '../model/types';
 import { SCHEMA_VERSION } from '../model/types';
+import { normalizeTree } from '../core/rowtree';
 
 const FILE_EXTENSION = '.cuetl.json';
 
@@ -87,22 +88,30 @@ function validateGrid(value: unknown): BeatGrid {
   };
 }
 
-const ROW_KINDS: readonly RowKind[] = ['track', 'section', 'cue'];
+const ROW_KINDS: readonly RowKind[] = ['track', 'section', 'cue', 'group'];
 
 function validateRow(value: unknown, index: number): Row {
   if (!isRecord(value)) throw new Error(`Invalid project: rows[${index}] must be an object.`);
   const kind = value.kind;
   if (typeof kind !== 'string' || !ROW_KINDS.includes(kind as RowKind)) {
-    throw new Error(`Invalid project: rows[${index}].kind must be 'track' | 'section' | 'cue'.`);
+    throw new Error(
+      `Invalid project: rows[${index}].kind must be 'track' | 'section' | 'cue' | 'group'.`,
+    );
   }
-  return {
+  // Back-fill the tree fields for projects saved before groups existed.
+  const parentId = typeof value.parentId === 'string' ? value.parentId : null;
+  const row: Row = {
     id: requireString(value, 'id'),
     kind: kind as RowKind,
     name: requireString(value, 'name'),
     icon: requireString(value, 'icon'),
     color: requireString(value, 'color'),
     order: requireFiniteNumber(value.order, `rows[${index}].order`),
+    parentId,
   };
+  if (kind === 'group') row.collapsed = Boolean(value.collapsed);
+  if (typeof value.prepCue === 'string') row.prepCue = value.prepCue;
+  return row;
 }
 
 function validateRows(value: unknown): Row[] {
@@ -116,23 +125,9 @@ function validateRows(value: unknown): Row[] {
   if (sectionCount !== 1) {
     throw new Error(`Invalid project: expected exactly one 'section' row, found ${sectionCount}.`);
   }
-  return normalizeRowOrders(rows);
-}
-
-/**
- * Re-enforce the order invariants (spec §4) on import: track=0, section=1, and cue rows
- * unique sequential orders >= 2 (preserving their relative order). Hand-edited/corrupt
- * JSON could otherwise carry bogus orders that unpin the fixed rows.
- */
-function normalizeRowOrders(rows: Row[]): Row[] {
-  const track = rows.find((r) => r.kind === 'track')!;
-  const section = rows.find((r) => r.kind === 'section')!;
-  const cues = rows.filter((r) => r.kind === 'cue').sort((a, b) => a.order - b.order);
-  return [
-    { ...track, order: 0 },
-    { ...section, order: 1 },
-    ...cues.map((r, i) => ({ ...r, order: i + 2 })),
-  ];
+  // Re-enforce the full tree shape (pin track/section, per-parent order, repair dangling
+  // parents, break cycles) — lenient, matching the existing order-normalization on import.
+  return normalizeTree(rows);
 }
 
 function validateBlock(value: unknown, index: number): Block {

@@ -4,3 +4,20 @@
   height: 100%;
   overflow: hidden;
 }
+
+/* Transient boot/status banner (e.g. shared-set load errors). */
+.app-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-0);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-1));
+  border-bottom: 1px solid var(--line);
+}
+
+.app-banner > span {
+  flex: 1 1 auto;
+}
+

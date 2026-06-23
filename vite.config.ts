@@ -1,12 +1,15 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { apiDevPlugin } from './dev/apiDevPlugin';
 
 // NOTE on deployment base path:
 //   For GitHub Pages project sites the app is served from /<repo>/, so build with
 //   `vite build --base=/<repo>/`  (or set base below). Netlify/Vercel/root hosts: leave '/'.
 export default defineConfig({
   base: process.env.VITE_BASE ?? '/',
-  plugins: [react()],
+  // apiDevPlugin serves the Vercel `/api` functions during `npm run dev` (dev-only);
+  // in production those run as real Vercel serverless functions.
+  plugins: [apiDevPlugin(), react()],
   worker: {
     // Workers (peaks + BPM/essentia) are authored as ES modules.
     format: 'es',

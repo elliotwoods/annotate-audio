@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FolderPlus, Plus } from 'lucide-react';
 import type { Row } from '../model/types';
 import {
-  useSortedRows,
+  useVisibleRows,
   useBlocksByRow,
   useView,
   useGrid,
@@ -12,28 +12,58 @@ import {
 import { useStore } from '../store/store';
 import { snapTime } from '../core/grid';
 import { timeToX, xToTime } from '../core/transform';
+import { blockHeightForLabel, labelLineCount, rowHeightForLabels } from './metrics';
 import { RowGutter } from './RowGutter';
 import { BlockView } from './BlockView';
+import { useRowDnD } from './useRowDnD';
 import './Lanes.css';
 
+interface RowChrome {
+  depth: number;
+  dragging: boolean;
+  onGripPointerDown: (e: React.PointerEvent, rowId: string) => void;
+}
+
 export function Lanes(): JSX.Element {
-  const rows = useSortedRows();
+  const visible = useVisibleRows();
   const addCueRow = useStore((s) => s.addCueRow);
+  const addGroup = useStore((s) => s.addGroup);
   const laneWidth = useStore((s) => s.laneWidth);
 
+  const lanesRef = useRef<HTMLDivElement>(null);
+  const { draggingSubtree, indicator, onGripPointerDown } = useRowDnD(lanesRef);
+
   return (
-    <div className="lanes">
-      {rows.map((row) =>
-        row.kind === 'track' ? (
-          <TrackLane key={row.id} row={row} laneWidth={laneWidth} />
-        ) : (
-          <CueLane key={row.id} row={row} laneWidth={laneWidth} />
-        ),
+    <div className="lanes" ref={lanesRef}>
+      {visible.map(({ row, depth }) => {
+        const chrome: RowChrome = {
+          depth,
+          dragging: draggingSubtree.has(row.id),
+          onGripPointerDown,
+        };
+        if (row.kind === 'track') return <TrackLane key={row.id} row={row} laneWidth={laneWidth} chrome={chrome} />;
+        if (row.kind === 'group') return <GroupLane key={row.id} row={row} laneWidth={laneWidth} chrome={chrome} />;
+        return <CueLane key={row.id} row={row} laneWidth={laneWidth} chrome={chrome} />;
+      })}
+
+      {indicator && (
+        <div
+          className={`lanes__drop${indicator.into ? ' into' : ''}${indicator.valid ? '' : ' invalid'}`}
+          style={{ top: indicator.top, height: indicator.height }}
+        />
       )}
+
       <div className="lanes__addrow">
-        <button type="button" className="ghost lanes__addrow-btn" onClick={() => addCueRow()}>
-          <Plus size={15} /> add row
-        </button>
+        <div className="lanes__addrow-prep" />
+        <div className="lanes__addrow-gutter">
+          <button type="button" className="ghost lanes__addrow-btn" onClick={() => addCueRow()}>
+            <Plus size={15} /> add row
+          </button>
+          <button type="button" className="ghost lanes__addrow-btn" onClick={() => addGroup()}>
+            <FolderPlus size={15} /> group
+          </button>
+        </div>
+        <div className="lanes__addrow-lane" />
       </div>
     </div>
   );
@@ -41,7 +71,7 @@ export function Lanes(): JSX.Element {
 
 // ── Track row (non-interactive bar showing the audio) ────────────────────────
 
-function TrackLane({ row, laneWidth }: { row: Row; laneWidth: number }): JSX.Element {
+function TrackLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chrome: RowChrome }): JSX.Element {
   const view = useView();
   const audio = useAudio();
 
@@ -49,8 +79,9 @@ function TrackLane({ row, laneWidth }: { row: Row; laneWidth: number }): JSX.Ele
   const barWidth = audio ? Math.max(2, audio.duration * view.pixelsPerSecond) : 0;
 
   return (
-    <div className="lanes__strip">
-      <RowGutter row={row} />
+    <div className="lanes__strip" data-rowid={row.id}>
+      <div className="prep-cell prep-cell--empty" />
+      <RowGutter row={row} depth={chrome.depth} />
       <div className="lanes__lane lanes__lane--track" style={{ width: laneWidth }}>
         {audio ? (
           <div
@@ -70,6 +101,86 @@ function TrackLane({ row, laneWidth }: { row: Row; laneWidth: number }): JSX.Ele
   );
 }
 
+// ── Group header row (folder) ─────────────────────────────────────────────────
+
+function GroupLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chrome: RowChrome }): JSX.Element {
+  return (
+    <div className={`lanes__strip lanes__strip--group${chrome.dragging ? ' dragging' : ''}`} data-rowid={row.id}>
+      <div className="prep-cell prep-cell--empty" style={{ background: tint(row.color) }} />
+      <RowGutter
+        row={row}
+        depth={chrome.depth}
+        dragging={chrome.dragging}
+        onGripPointerDown={chrome.onGripPointerDown}
+      />
+      <div
+        className="lanes__lane lanes__lane--group"
+        style={{ width: laneWidth, background: tint(row.color) }}
+      />
+    </div>
+  );
+}
+
+// ── Prep cue (per-row pre-scene state note, in the left column) ───────────────
+
+const MAX_PREP_ROWS = 12;
+
+function PrepCue({ row, onEditHeight }: { row: Row; onEditHeight: (px: number) => void }): JSX.Element {
+  const updateRow = useStore((s) => s.updateRow);
+  const [draft, setDraft] = useState(row.prepCue ?? '');
+  const [editing, setEditing] = useState(false);
+
+  // Re-sync if the value changes externally (undo, load, cloud open…).
+  useEffect(() => {
+    setDraft(row.prepCue ?? '');
+  }, [row.prepCue]);
+
+  // While focused, report the height the draft needs so the row grows live.
+  useEffect(() => {
+    if (editing) onEditHeight(blockHeightForLabel(draft));
+    return () => onEditHeight(0);
+  }, [editing, draft, onEditHeight]);
+
+  const commit = () => {
+    setEditing(false);
+    if (draft !== (row.prepCue ?? '')) updateRow(row.id, { prepCue: draft });
+  };
+
+  return (
+    <div className="prep-cell">
+      <textarea
+        className="prep-cue"
+        value={draft}
+        placeholder="Prep…"
+        rows={Math.min(Math.max(labelLineCount(draft), 1), MAX_PREP_ROWS)}
+        onFocus={() => setEditing(true)}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setDraft(row.prepCue ?? '');
+            (e.target as HTMLTextAreaElement).blur();
+          }
+        }}
+        aria-label={`Prep cue for ${row.name}`}
+      />
+    </div>
+  );
+}
+
+/** A very faint tint of the group colour for its lane band. */
+function tint(hex: string): string {
+  const v = hex.replace('#', '');
+  if (v.length !== 6) return 'transparent';
+  const r = parseInt(v.slice(0, 2), 16);
+  const g = parseInt(v.slice(2, 4), 16);
+  const b = parseInt(v.slice(4, 6), 16);
+  if ([r, g, b].some(Number.isNaN)) return 'transparent';
+  return `rgba(${r}, ${g}, ${b}, 0.08)`;
+}
+
 // ── Cue / Section row (interactive lane) ─────────────────────────────────────
 
 interface PreviewRect {
@@ -77,7 +188,7 @@ interface PreviewRect {
   end: number;
 }
 
-function CueLane({ row, laneWidth }: { row: Row; laneWidth: number }): JSX.Element {
+function CueLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chrome: RowChrome }): JSX.Element {
   const blocks = useBlocksByRow(row.id);
   const view = useView();
   const grid = useGrid();
@@ -90,16 +201,21 @@ function CueLane({ row, laneWidth }: { row: Row; laneWidth: number }): JSX.Eleme
 
   const laneRef = useRef<HTMLDivElement>(null);
   const [preview, setPreview] = useState<PreviewRect | null>(null);
+  // Height the in-progress label editor needs, so the row grows live while typing.
+  const [editHeight, setEditHeight] = useState(0);
 
-  // Mutable gesture state (avoids re-renders mid-drag except for the preview). We store
-  // only the start clientX and recompute BOTH endpoints live, so holding Alt mid-drag
-  // disables snap for the whole gesture — start included (spec §12).
+  // Row grows to fit the tallest multi-line label among its blocks AND its prep cue
+  // (spec: auto height), plus at least the height the active editor needs.
+  const committedHeight = useMemo(
+    () => Math.max(rowHeightForLabels(blocks.map((b) => b.label)), blockHeightForLabel(row.prepCue ?? '')),
+    [blocks, row.prepCue],
+  );
+  const rowHeight = Math.max(committedHeight, editHeight);
+
   const gesture = useRef<{ startClientX: number; rowId: string } | null>(null);
-  // Latest reactive values for use inside pointer handlers.
   const liveRef = useRef({ view, grid, snap });
   liveRef.current = { view, grid, snap };
 
-  /** Convert a clientX to a lane-relative time using the lane's left edge. */
   const clientXToTime = (clientX: number): number => {
     const rect = laneRef.current?.getBoundingClientRect();
     const x = rect ? clientX - rect.left : clientX;
@@ -109,9 +225,6 @@ function CueLane({ row, laneWidth }: { row: Row; laneWidth: number }): JSX.Eleme
   const maybeSnap = (t: number, altKey: boolean): number =>
     altKey ? t : snapTime(t, liveRef.current.grid, liveRef.current.snap);
 
-  // Stable handler instances so the add/removeEventListener pair matches across the
-  // re-renders that the live preview triggers mid-drag. Creating a block is a single
-  // store mutation at pointerup, so it needs no manual undo grouping (zundo records it).
   const handlersRef = useRef({
     move(e: PointerEvent) {
       const g = gesture.current;
@@ -133,7 +246,6 @@ function CueLane({ row, laneWidth }: { row: Row; laneWidth: number }): JSX.Eleme
       if (!g) return;
 
       if (Math.abs(e.clientX - g.startClientX) <= 3) {
-        // A click on empty space → clear selection, create nothing.
         clearSelection();
         return;
       }
@@ -146,7 +258,6 @@ function CueLane({ row, laneWidth }: { row: Row; laneWidth: number }): JSX.Eleme
   });
 
   const onLanePointerDown = (e: React.PointerEvent) => {
-    // Only react to a primary-button press on empty lane space (blocks stop propagation).
     if (e.button !== 0) return;
     if (e.target !== e.currentTarget) return;
     e.preventDefault();
@@ -158,7 +269,7 @@ function CueLane({ row, laneWidth }: { row: Row; laneWidth: number }): JSX.Eleme
   };
 
   const onLaneDoubleClick = (e: React.MouseEvent) => {
-    if (e.target !== e.currentTarget) return; // ignore double-clicks on existing blocks
+    if (e.target !== e.currentTarget) return;
     const t = Math.max(0, maybeSnap(clientXToTime(e.clientX), e.altKey));
     addPointCue(row.id, t);
   };
@@ -167,17 +278,34 @@ function CueLane({ row, laneWidth }: { row: Row; laneWidth: number }): JSX.Eleme
   const previewWidth = preview ? Math.max(2, (preview.end - preview.start) * view.pixelsPerSecond) : 0;
 
   return (
-    <div className="lanes__strip">
-      <RowGutter row={row} />
+    <div
+      className={`lanes__strip${chrome.dragging ? ' dragging' : ''}`}
+      data-rowid={row.id}
+      style={{ ['--row-h' as string]: `${rowHeight}px` }}
+    >
+      <PrepCue row={row} onEditHeight={setEditHeight} />
+      <RowGutter
+        row={row}
+        depth={chrome.depth}
+        dragging={chrome.dragging}
+        onGripPointerDown={row.kind === 'section' ? undefined : chrome.onGripPointerDown}
+      />
       <div
         ref={laneRef}
         className={`lanes__lane lanes__lane--${row.kind}`}
+        data-lane-rowid={row.id}
         style={{ width: laneWidth }}
         onPointerDown={onLanePointerDown}
         onDoubleClick={onLaneDoubleClick}
       >
         {blocks.map((b) => (
-          <BlockView key={b.id} block={b} color={row.color} selected={selection.includes(b.id)} />
+          <BlockView
+            key={b.id}
+            block={b}
+            color={row.color}
+            selected={selection.includes(b.id)}
+            onEditHeight={setEditHeight}
+          />
         ))}
         {preview && (
           <div

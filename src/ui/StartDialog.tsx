@@ -12,11 +12,15 @@ import {
 } from '../persistence/db';
 import { importProjectFromFile } from '../persistence/json';
 import { startNewProject, loadProjectWithAudio, relinkAudioFile } from '../audio/audioFile';
+import { listCloudProjects, type CloudProjectSummary } from '../persistence/cloud';
+import { openCloudProject } from '../persistence/cloudSync';
+import { isVerified } from '../auth/session';
 import type { Project } from '../model/types';
 
 export function StartDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const currentId = useProjectId();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [cloudProjects, setCloudProjects] = useState<CloudProjectSummary[]>([]);
   const [storage, setStorage] = useState<{ usage: number; quota: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [relinkFor, setRelinkFor] = useState<Project | null>(null);
@@ -26,6 +30,15 @@ export function StartDialog({ open, onClose }: { open: boolean; onClose: () => v
   const refresh = useCallback(async () => {
     setProjects(await listProjects());
     setStorage(await estimateStorage());
+    if (isVerified()) {
+      try {
+        setCloudProjects(await listCloudProjects());
+      } catch {
+        setCloudProjects([]);
+      }
+    } else {
+      setCloudProjects([]);
+    }
   }, []);
 
   useEffect(() => {
@@ -51,6 +64,17 @@ export function StartDialog({ open, onClose }: { open: boolean; onClose: () => v
       return; // keep dialog open so the user can relink
     }
     onClose();
+  };
+
+  const openCloud = async (id: string) => {
+    setNotice(null);
+    try {
+      const r = await openCloudProject(id);
+      if (!r.audioReady) setNotice('Opened set, but its audio could not be loaded.');
+      onClose();
+    } catch (err) {
+      setNotice(`Could not open cloud project: ${(err as Error).message}`);
+    }
   };
 
   const onImport = async (file: File | undefined) => {
@@ -131,6 +155,24 @@ export function StartDialog({ open, onClose }: { open: boolean; onClose: () => v
             />
           ))}
         </div>
+
+        {cloudProjects.length > 0 && (
+          <>
+            <h3 className="dialog-subhead">Cloud projects</h3>
+            <div className="project-list">
+              {cloudProjects.map((p) => (
+                <div className={`project-row${p.id === currentId ? ' current' : ''}`} key={p.id}>
+                  <button className="project-open" onClick={() => void openCloud(p.id)}>
+                    <span className="project-name">{p.name || 'Untitled'}</span>
+                    <span className="project-meta muted">
+                      {new Date(p.updatedAt).toLocaleString()} · cloud
+                    </span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
 
         <div className="dialog-foot">
           {storage && (

@@ -7,6 +7,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import './Timeline.css';
 import { RulerCanvas } from './RulerCanvas';
+import { TimeRulerCanvas } from './TimeRulerCanvas';
 import { WaveformCanvas } from './WaveformCanvas';
 import { Lanes } from './Lanes';
 import { Playhead } from './Playhead';
@@ -14,12 +15,14 @@ import { useStore } from '../store/store';
 import { useView, useAudio, useContentDuration } from '../store/selectors';
 import { xToTime, clampScroll } from '../core/transform';
 import { transport } from '../audio/transport';
-import { RULER_H, WAVEFORM_H } from './metrics';
+import { RULER_H, TIME_RULER_H, WAVEFORM_H } from './metrics';
 
 export function Timeline() {
   const view = useView();
   const audio = useAudio();
   const laneWidth = useStore((s) => s.laneWidth);
+  const gutterWidth = useStore((s) => s.gutterWidth);
+  const prepWidth = useStore((s) => s.prepWidth);
   const contentDuration = useContentDuration();
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -66,11 +69,20 @@ export function Timeline() {
       }
       // else: plain vertical wheel over lanes → native row scroll (don't preventDefault)
     };
+    // Suppress the native middle-button autoscroll (Windows) so middle-drag pans instead;
+    // preventDefault on the React pointerdown isn't reliable for this.
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 1) e.preventDefault();
+    };
     root.addEventListener('wheel', onWheel, { passive: false });
-    return () => root.removeEventListener('wheel', onWheel);
+    root.addEventListener('mousedown', onMouseDown);
+    return () => {
+      root.removeEventListener('wheel', onWheel);
+      root.removeEventListener('mousedown', onMouseDown);
+    };
   }, []);
 
-  // ── free click-scrub on ruler + waveform (no snap, spec §8.2/§11) ───────────
+  // ── free click-scrub on ruler + waveform (LEFT button, no snap, spec §8.2/§11) ──
   const scrubbing = useRef(false);
   const scrub = (clientX: number) => {
     const rect = laneMeasureRef.current?.getBoundingClientRect();
@@ -78,35 +90,93 @@ export function Timeline() {
     const x = clientX - rect.left;
     transport.seek(Math.max(0, xToTime(x, useStore.getState().view)));
   };
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      if (scrubbing.current) scrub(e.clientX);
-    };
-    const onUp = () => {
-      scrubbing.current = false;
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-  }, []);
   const onScrubDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return; // left only; right/middle pan is handled on the root
     scrubbing.current = true;
     scrub(e.clientX);
   };
 
+  // ── pan: right- or middle-button drag anywhere in the timeline ──────────────
+  const pan = useRef<{ startX: number; startScroll: number } | null>(null);
+  const onRootPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 2 && e.button !== 1) return;
+    e.preventDefault();
+    pan.current = { startX: e.clientX, startScroll: useStore.getState().view.scrollSec };
+    document.body.style.cursor = 'grabbing';
+  };
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (scrubbing.current) {
+        scrub(e.clientX);
+        return;
+      }
+      const p = pan.current;
+      if (!p) return;
+      const v = useStore.getState().view;
+      const next = clampScroll(
+        p.startScroll - (e.clientX - p.startX) / v.pixelsPerSecond,
+        v,
+        useStore.getState().laneWidth,
+        contentDurationFromState(),
+      );
+      useStore.getState().setScrollSec(next);
+    };
+    const onUp = () => {
+      scrubbing.current = false;
+      if (pan.current) {
+        pan.current = null;
+        document.body.style.cursor = '';
+      }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    // pointercancel: the OS/browser can take over a gesture without a pointerup — clean
+    // up so the pan/scrub doesn't get stuck (mirrors BlockView/Lanes).
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, []);
+
   return (
-    <div className="timeline" ref={rootRef}>
+    <div
+      className="timeline"
+      ref={rootRef}
+      style={
+        {
+          ['--gutter-w' as string]: `${gutterWidth}px`,
+          ['--prep-w' as string]: `${prepWidth}px`,
+        } as React.CSSProperties
+      }
+      onPointerDown={onRootPointerDown}
+      onContextMenu={(e) => {
+        // Suppress the menu for right-drag panning, but keep it on editable fields.
+        if (!(e.target as HTMLElement).closest('input, textarea, [contenteditable]')) {
+          e.preventDefault();
+        }
+      }}
+    >
       <div className="tl-strip">
-        <div className="tl-corner" />
+        <div className="tl-prep-corner tl-ruler-label">Prep</div>
+        <div className="tl-corner tl-ruler-label">Bars</div>
         <div className="tl-lane" onPointerDown={onScrubDown} style={{ height: RULER_H }}>
           <RulerCanvas width={laneWidth} height={RULER_H} />
         </div>
       </div>
 
       <div className="tl-strip">
+        <div className="tl-prep-corner" />
+        <div className="tl-corner tl-ruler-label">Time</div>
+        <div className="tl-lane" onPointerDown={onScrubDown} style={{ height: TIME_RULER_H }}>
+          <TimeRulerCanvas width={laneWidth} height={TIME_RULER_H} />
+        </div>
+      </div>
+
+      <div className="tl-strip">
+        <div className="tl-prep-corner" />
         <div className="tl-gutter-label" title={audio?.fileName}>
           {audio ? audio.fileName : 'No audio'}
         </div>
@@ -121,6 +191,7 @@ export function Timeline() {
             ruler/waveform/playhead all share the exact cue-lane width. */}
         <div className="tl-measure" aria-hidden="true">
           <div />
+          <div />
           <div ref={laneMeasureRef} />
         </div>
         <Lanes />
@@ -134,7 +205,77 @@ export function Timeline() {
       />
 
       <Playhead />
+
+      {/* Two column dividers: prep|gutter at x=prepWidth, gutter|lane at x=prepWidth+gutterWidth. */}
+      <ColumnResizer
+        leftPx={prepWidth}
+        value={prepWidth}
+        resetTo={180}
+        label="Resize prep column"
+        onResize={(px) => useStore.getState().setPrepWidth(px)}
+      />
+      <ColumnResizer
+        leftPx={prepWidth + gutterWidth}
+        value={gutterWidth}
+        resetTo={192}
+        label="Resize row-header column"
+        onResize={(px) => useStore.getState().setGutterWidth(px)}
+      />
     </div>
+  );
+}
+
+// ── a draggable vertical column divider ─────────────────────────────────────────
+function ColumnResizer({
+  leftPx,
+  value,
+  resetTo,
+  label,
+  onResize,
+}: {
+  leftPx: number;
+  value: number;
+  resetTo: number;
+  label: string;
+  onResize: (px: number) => void;
+}) {
+  const drag = useRef<{ startX: number; startW: number } | null>(null);
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      onResize(d.startW + (e.clientX - d.startX));
+    };
+    const onUp = () => {
+      drag.current = null;
+      document.body.style.cursor = '';
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [onResize]);
+
+  return (
+    <div
+      className="tl-col-resizer"
+      style={{ left: leftPx }}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      title={`${label} (double-click to reset)`}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        drag.current = { startX: e.clientX, startW: value };
+        document.body.style.cursor = 'col-resize';
+      }}
+      onDoubleClick={() => onResize(resetTo)}
+    />
   );
 }
 

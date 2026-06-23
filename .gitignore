@@ -6,3 +6,9 @@ dist-ssr
 *.log
 .vite
 coverage
+
+# Secrets & deployment
+.env
+.env.*
+!.env.example
+.vercel

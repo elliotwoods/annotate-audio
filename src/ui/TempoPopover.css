@@ -1,0 +1,28 @@
+/* Tempo tools popover — Tap tempo + Detect BPM, anchored beneath the toolbar button. */
+
+/* Transparent full-window catcher so an outside click/tap closes the popover. */
+.tempo-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+}
+
+.tempo-popover {
+  position: fixed;
+  z-index: 251;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.tempo-popover-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 2px 0;
+}

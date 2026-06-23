@@ -2,13 +2,62 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   height: var(--row-h);
   padding: 0 6px 0 8px;
   background: var(--bg-2);
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   overflow: visible;
+}
+.row-gutter--group {
+  background: var(--bg-3);
+  font-weight: 600;
+}
+.row-gutter--dragging {
+  opacity: 0.5;
+}
+
+/* Drag grip + collapse chevron */
+.row-gutter__grip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 0;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  cursor: grab;
+  touch-action: none;
+}
+.row-gutter__grip:hover {
+  color: var(--text-0);
+}
+.row-gutter__grip:active {
+  cursor: grabbing;
+}
+.row-gutter__chevron {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  color: var(--text-1);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+.row-gutter__chevron:hover {
+  color: var(--text-0);
+  background: var(--bg-4);
+}
+
+/* Compact group/cue action buttons */
+.row-gutter__act {
+  padding: 3px;
+  color: var(--text-2);
+}
+.row-gutter__act:hover:not(:disabled) {
+  color: var(--text-0);
 }
 
 .row-gutter__icon-wrap,
@@ -63,10 +112,16 @@
 }
 
 .row-gutter__actions {
-  display: flex;
+  /* Hidden until the row header is hovered or focused (declutters the gutter). The name
+     input reclaims the freed space when they're hidden. */
+  display: none;
   align-items: center;
   gap: 0;
   flex: none;
+}
+.row-gutter:hover .row-gutter__actions,
+.row-gutter:focus-within .row-gutter__actions {
+  display: flex;
 }
 
 .row-gutter__reorder,

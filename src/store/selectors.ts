@@ -5,6 +5,7 @@ import { useMemo } from 'react';
 import { useStore } from './store';
 import type { StoreState } from './store';
 import type { Block, Row } from '../model/types';
+import { flattenRows, type VisibleRow } from '../core/rowtree';
 
 export const useView = () => useStore((s) => s.view);
 export const useGrid = () => useStore((s) => s.core.grid);
@@ -16,10 +17,19 @@ export const useIsPlaying = () => useStore((s) => s.playback.isPlaying);
 export const useDetection = () => useStore((s) => s.detection);
 export const useSnap = () => useStore((s) => s.view.snap);
 
-/** All rows sorted by `order` (track=0, section=1, cue rows >= 2). */
+/** All rows sorted by `order` (flat — does not account for the group tree). */
 export function useSortedRows(): Row[] {
   const rows = useStore((s) => s.core.rows);
   return useMemo(() => [...rows].sort((a, b) => a.order - b.order), [rows]);
+}
+
+/**
+ * Rows in display order (depth-first through the group tree, descendants of collapsed
+ * groups omitted), each with its nesting `depth`. This is what the lane list renders.
+ */
+export function useVisibleRows(): VisibleRow[] {
+  const rows = useStore((s) => s.core.rows);
+  return useMemo(() => flattenRows(rows), [rows]);
 }
 
 export function useRow(rowId: string): Row | undefined {

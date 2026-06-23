@@ -29,10 +29,16 @@ export function startAutosave(): () => void {
 
   /** Persist the current exported Project, serializing against any in-flight save. */
   const flush = (): Promise<void> => {
-    const project = useStore.getState().exportProject();
+    const state = useStore.getState();
+    const project = state.exportProject();
+    state.setSaveStatus('saving');
     saving = saving
       .catch(() => undefined) // never let a prior failure break the chain
-      .then(() => saveProject(project));
+      .then(() => saveProject(project))
+      .then(
+        () => useStore.getState().setSaveStatus('saved'),
+        () => useStore.getState().setSaveStatus('saved'), // errors are swallowed here as before
+      );
     return saving;
   };
 

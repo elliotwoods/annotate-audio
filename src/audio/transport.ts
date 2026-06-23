@@ -12,10 +12,17 @@ import { nextBar, prevBar } from '../core/grid';
 
 export type TickListener = (pos: number, playing: boolean) => void;
 
+/** A discrete transport action — broadcast for opt-in collaborative playback sync. */
+export type TransportEvent = { kind: 'play' | 'pause' | 'seek' | 'stop'; pos: number };
+export type TransportListener = (e: TransportEvent) => void;
+
 class Transport {
   readonly engine = new AudioEngine();
   private listeners = new Set<TickListener>();
+  private transportListeners = new Set<TransportListener>();
   private raf = 0;
+  /** Desired output gain (0 = muted). Tracked here so it survives audio (re)loads. */
+  private gainValue = 1;
 
   constructor() {
     this.engine.onEnded = () => {
@@ -38,6 +45,20 @@ class Transport {
     const pos = this.position();
     const playing = this.engine.isPlaying;
     for (const cb of this.listeners) cb(pos, playing);
+  }
+
+  /**
+   * Subscribe to discrete transport actions (play/pause/seek/stop). Used by collaborative
+   * playback sync; kept separate from onTick (which is the per-frame position stream).
+   */
+  onTransport(cb: TransportListener): () => void {
+    this.transportListeners.add(cb);
+    return () => this.transportListeners.delete(cb);
+  }
+
+  private emitTransport(kind: TransportEvent['kind']): void {
+    const e: TransportEvent = { kind, pos: this.position() };
+    for (const cb of this.transportListeners) cb(e);
   }
 
   // ── clock ──────────────────────────────────────────────────────────────────
@@ -67,10 +88,14 @@ class Transport {
 
   async play(): Promise<void> {
     if (!this.engine.isLoaded) return;
+    // Re-apply the desired gain: the GainNode is (re)created on each audio load and defaults
+    // to full volume, so a mute chosen before/while loading must be reasserted here.
+    this.engine.setGain(this.gainValue);
     await this.engine.play();
     useStore.getState().setPlayback({ isPlaying: true, positionSec: this.position() });
     this.startLoop();
     this.notify();
+    this.emitTransport('play');
   }
 
   pause(): void {
@@ -78,6 +103,7 @@ class Transport {
     useStore.getState().setPlayback({ isPlaying: false, positionSec: this.position() });
     this.stopLoop();
     this.notify();
+    this.emitTransport('pause');
   }
 
   async togglePlay(): Promise<void> {
@@ -90,6 +116,7 @@ class Transport {
     useStore.getState().setPlayback({ isPlaying: false, positionSec: 0 });
     this.stopLoop();
     this.notify();
+    this.emitTransport('stop');
   }
 
   /** Free seek (no snap) — spec §8.2/§11: clicking ruler/waveform. */
@@ -97,13 +124,19 @@ class Transport {
     this.engine.seek(time);
     useStore.getState().setPlayback({ positionSec: this.position() });
     this.notify();
+    this.emitTransport('seek');
   }
 
   setRate(rate: number): void {
     this.engine.setRate(rate);
   }
   setGain(gain: number): void {
+    this.gainValue = gain;
     this.engine.setGain(gain);
+  }
+  /** Current desired output gain (0 = muted). */
+  getGain(): number {
+    return this.gainValue;
   }
 
   // ── quantised jumps (spec §11) ─────────────────────────────────────────────

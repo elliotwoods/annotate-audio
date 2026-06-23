@@ -1,7 +1,7 @@
 // Canonical data model (spec §4). All canonical times are in SECONDS (Float).
 // See spec §5.2 for why seconds — not bars — are the canonical unit.
 
-export type RowKind = 'track' | 'section' | 'cue';
+export type RowKind = 'track' | 'section' | 'cue' | 'group';
 
 export type SnapResolution = 'bar' | 'half' | 'quarter' | 'eighth' | 'off';
 
@@ -14,11 +14,22 @@ export interface BeatGrid {
 
 export interface Row {
   id: string; // uuid
-  kind: RowKind; // 'track' and 'section' rows always present, not deletable
-  name: string; // editable; for 'track' this is the audio track name
-  icon: string; // lucide icon name (track/section get sensible defaults)
+  kind: RowKind; // 'track'/'section' always present & not deletable; 'group' = a folder
+  name: string; // editable; for 'track' this is the audio track name; for 'group' the folder name
+  icon: string; // lucide icon name (track/section/group get sensible defaults)
   color: string; // hex, e.g. "#7C5CFF"
-  order: number; // vertical position; track=0, section=1 enforced
+  /**
+   * Sibling order WITHIN `parentId` (not a global position). Track is pinned to
+   * parentId=null/order=0 and section to parentId=null/order=1; every other top-level
+   * node uses order >= 2. Nested children use sequential sibling order within their group.
+   */
+  order: number;
+  /** Containing group's id, or null for a top-level row. Only 'cue'/'group' may be nested. */
+  parentId: string | null;
+  /** Groups only: whether the folder is collapsed (its descendants are hidden). */
+  collapsed?: boolean;
+  /** Free-text "prep cue": the state this row should be in before the scene starts. */
+  prepCue?: string;
 }
 
 export interface Block {

@@ -18,6 +18,7 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize,
+  ScanSearch,
   Crosshair,
 } from 'lucide-react';
 import { transport } from '../audio/transport';
@@ -45,6 +46,8 @@ export function Transport() {
   const setSnap = useStore((s) => s.setSnap);
   const zoomBy = useStore((s) => s.zoomBy);
   const zoomToFit = useStore((s) => s.zoomToFit);
+  const zoomToSelection = useStore((s) => s.zoomToSelection);
+  const hasSelection = useStore((s) => s.selection.length > 0);
   const followPlayhead = useStore((s) => s.view.followPlayhead);
   const toggleFollow = useStore((s) => s.toggleFollow);
 
@@ -214,6 +217,16 @@ export function Transport() {
           aria-label="Fit to window"
         >
           <Maximize size={18} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="icon transport-btn"
+          onClick={() => zoomToSelection()}
+          disabled={!hasSelection}
+          title="Zoom to selection"
+          aria-label="Zoom to selection"
+        >
+          <ScanSearch size={18} aria-hidden="true" />
         </button>
       </div>
 

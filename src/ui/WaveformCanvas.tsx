@@ -97,7 +97,7 @@ export function WaveformCanvas({ width, height }: { width: number; height: numbe
     <div className="waveform-canvas-wrap">
       <canvas ref={canvasRef} className="waveform-canvas" />
       {!peaks && width > 0 && height > 0 ? (
-        <div className="waveform-canvas-hint">Load audio</div>
+        <div className="waveform-canvas-hint">Drag an audio file here, or click “Load audio”</div>
       ) : null}
     </div>
   );

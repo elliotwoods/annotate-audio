@@ -28,9 +28,17 @@ import type {
   SnapResolution,
   ViewState,
 } from '../model/types';
-import { makeBlock, makeCueRow, makeProject, joinProject, splitProject } from '../model/defaults';
+import {
+  makeBlock,
+  makeCueRow,
+  makeGroupRow,
+  makeProject,
+  joinProject,
+  splitProject,
+} from '../model/defaults';
 import { snapTime } from '../core/grid';
 import { xToTime, clampScroll } from '../core/transform';
+import { normalizeTree, isDescendant, subtreeIds } from '../core/rowtree';
 import type { PeaksData } from '../audio/peaksTypes';
 
 export interface PlaybackState {
@@ -38,6 +46,9 @@ export interface PlaybackState {
   /** Anchor position (seconds): where we are when paused/stopped or where play started. */
   positionSec: number;
 }
+
+/** Transient save/sync status for the top-bar indicator (never persisted/undone). */
+export type SaveStatus = 'idle' | 'saving' | 'saved';
 
 export type Confidence = 'low' | 'med' | 'high';
 
@@ -61,17 +72,30 @@ export interface StoreState {
   detection: DetectionState | null;
   /** Measured pixel width of the lane area (transient; not persisted/undone). */
   laneWidth: number;
+  /** Row-header (gutter) column width in px — a global editor preference (localStorage). */
+  gutterWidth: number;
+  /** Prep-cue column width in px — a global editor preference (localStorage). */
+  prepWidth: number;
   /** Computed waveform peaks for the loaded audio (transient; recomputed on load). */
   peaks: PeaksData | null;
+  /** Autosave/cloud-save status for the top-bar indicator (transient). */
+  saveStatus: SaveStatus;
 
   // ── project / meta ──────────────────────────────────────────────────────
   newProject: (name?: string) => void;
   loadProject: (project: Project) => void;
+  /**
+   * Replace ONLY `core` with a collaborator's document (no undo entry, preserves the local
+   * view/playback/selection). Use via {@link applyRemoteCoreNoHistory} so the temporal store
+   * is paused around the change.
+   */
+  applyRemoteCore: (remoteCore: ProjectCore) => void;
   /** Assemble the full Project (core + view) for export/persist; stamps updatedAt. */
   exportProject: () => Project;
   setProjectName: (name: string) => void;
   setAudioMeta: (meta: AudioMeta | null) => void;
   setPeaks: (peaks: PeaksData | null) => void;
+  setSaveStatus: (status: SaveStatus) => void;
 
   // ── grid ────────────────────────────────────────────────────────────────
   setGrid: (partial: Partial<BeatGrid>) => void;
@@ -89,26 +113,43 @@ export interface StoreState {
   setFollow: (follow: boolean) => void;
   toggleFollow: () => void;
   setLaneWidth: (px: number) => void;
+  setGutterWidth: (px: number) => void;
+  setPrepWidth: (px: number) => void;
   /** Zoom by a factor, keeping the time under `focalX` (default: viewport centre) fixed. */
   zoomBy: (factor: number, focalX?: number) => void;
   /** Set zoom so the whole content fits the lane area. */
   zoomToFit: () => void;
+  /** Zoom so the current block selection fills the view (no-op if nothing selected). */
+  zoomToSelection: () => void;
 
   // ── playback mirror (set by the transport singleton) ──────────────────────
   setPlayback: (partial: Partial<PlaybackState>) => void;
 
-  // ── rows ──────────────────────────────────────────────────────────────────
-  addCueRow: () => string;
+  // ── rows & groups ───────────────────────────────────────────────────────────
+  addCueRow: (parentId?: string | null) => string;
+  addGroup: (parentId?: string | null) => string;
   removeRow: (rowId: string) => void;
-  updateRow: (rowId: string, partial: Partial<Pick<Row, 'name' | 'icon' | 'color'>>) => void;
+  /** Delete a group: 'delete' removes its whole subtree (+blocks); 'ungroup' promotes children. */
+  removeGroup: (groupId: string, mode: 'delete' | 'ungroup') => void;
+  updateRow: (
+    rowId: string,
+    partial: Partial<Pick<Row, 'name' | 'icon' | 'color' | 'prepCue'>>,
+  ) => void;
+  toggleCollapse: (groupId: string) => void;
   moveRow: (rowId: string, dir: -1 | 1) => void;
+  /** Move a row/group under `newParentId` (null = top level) at `index` among its movable siblings. */
+  setParent: (rowId: string, newParentId: string | null, index?: number) => void;
+  /** Reorder the movable children of `parentId` to match `idsInOrder`. */
+  reorderSiblings: (parentId: string | null, idsInOrder: string[]) => void;
+  /** Back-compat shim: reorder top-level cue rows. */
   reorderCueRows: (cueRowIdsInOrder: string[]) => void;
 
   // ── blocks ────────────────────────────────────────────────────────────────
   addBlock: (rowId: string, start: number, end: number, label?: string) => string;
   addPointCue: (rowId: string, time: number, label?: string) => string;
   updateBlock: (id: string, partial: Partial<Omit<Block, 'id' | 'rowId'>>) => void;
-  moveBlock: (id: string, newStart: number) => void;
+  /** Move a cue horizontally (newStart) and optionally to another row (cue/section lane). */
+  moveBlock: (id: string, newStart: number, rowId?: string) => void;
   resizeBlock: (id: string, edge: 'start' | 'end', time: number) => void;
   setBlockLabel: (id: string, label: string) => void;
   toggleBlockPoint: (id: string) => void;
@@ -134,17 +175,57 @@ const now = () => Date.now();
 /** Max undo history depth. Shared by zundo's `limit` and the manual gesture push. */
 const HISTORY_LIMIT = 200;
 
+// Gutter (row-header) width: a global editor preference persisted in localStorage,
+// not part of any project. Clamped to a usable range.
+const GUTTER_DEFAULT = 192;
+const GUTTER_MIN = 140;
+const GUTTER_MAX = 520;
+const GUTTER_KEY = 'cuetl.gutterWidth';
+
+const clampGutter = (px: number): number =>
+  Math.min(GUTTER_MAX, Math.max(GUTTER_MIN, Math.round(px)));
+
+// Prep-cue column width (also a localStorage editor preference).
+const PREP_DEFAULT = 180;
+const PREP_MIN = 110;
+const PREP_MAX = 440;
+const PREP_KEY = 'cuetl.prepWidth';
+
+const clampPrep = (px: number): number => Math.min(PREP_MAX, Math.max(PREP_MIN, Math.round(px)));
+
+function loadStoredWidth(key: string, fallback: number, clamp: (n: number) => number): number {
+  try {
+    const v = Number(localStorage.getItem(key));
+    return Number.isFinite(v) && v > 0 ? clamp(v) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const loadGutterWidth = (): number => loadStoredWidth(GUTTER_KEY, GUTTER_DEFAULT, clampGutter);
+const loadPrepWidth = (): number => loadStoredWidth(PREP_KEY, PREP_DEFAULT, clampPrep);
+
 function freshCore(name?: string): ProjectCore {
   const { core } = splitProject(makeProject(name));
   return { ...core, updatedAt: now() };
 }
 
-function nextCueOrder(rows: Row[]): number {
-  return rows.reduce((m, r) => (r.kind === 'cue' ? Math.max(m, r.order) : m), 1) + 1;
-}
-
 function cueRowCount(rows: Row[]): number {
   return rows.filter((r) => r.kind === 'cue').length;
+}
+
+/** Movable children of a parent bucket (excludes the pinned track/section), sorted. */
+function movableSiblings(rows: Row[], parentId: string | null): Row[] {
+  return rows
+    .filter((r) => (r.parentId ?? null) === parentId && r.kind !== 'track' && r.kind !== 'section')
+    .sort((a, b) => a.order - b.order);
+}
+
+/** An order value that appends after the current siblings of `parentId`. */
+function nextSiblingOrder(rows: Row[], parentId: string | null): number {
+  let max = parentId === null ? 1 : -1; // top level reserves 0/1 for track/section
+  for (const r of rows) if ((r.parentId ?? null) === parentId) max = Math.max(max, r.order);
+  return max + 1;
 }
 
 export const useStore = create<StoreState>()(
@@ -161,7 +242,10 @@ export const useStore = create<StoreState>()(
         selection: [],
         detection: null,
         laneWidth: 800,
+        gutterWidth: loadGutterWidth(),
+        prepWidth: loadPrepWidth(),
         peaks: null,
+        saveStatus: 'idle',
 
         // ── project / meta ───────────────────────────────────────────────
         newProject: (name) => {
@@ -179,8 +263,10 @@ export const useStore = create<StoreState>()(
 
         loadProject: (project) => {
           const { core, view } = splitProject(project);
+          // Back-fill the tree shape for projects saved before groups existed (local DB
+          // loads skip validation) and re-enforce invariants.
           set({
-            core,
+            core: { ...core, rows: normalizeTree(core.rows) },
             view,
             selection: [],
             detection: null,
@@ -189,6 +275,18 @@ export const useStore = create<StoreState>()(
           });
           queueMicrotask(() => store.temporal.getState().clear());
         },
+
+        applyRemoteCore: (remoteCore) =>
+          set((s) => {
+            const liveIds = new Set(remoteCore.blocks.map((b) => b.id));
+            return {
+              // Re-enforce tree invariants on the incoming rows, just like loadProject does.
+              core: { ...remoteCore, rows: normalizeTree(remoteCore.rows) },
+              // Drop any selection that referenced blocks the collaborator deleted.
+              selection: s.selection.filter((id) => liveIds.has(id)),
+              // view / playback / peaks / detection are intentionally left untouched.
+            };
+          }),
 
         exportProject: () => {
           // Pure: assemble the full Project from core + view WITHOUT mutating the store.
@@ -212,6 +310,7 @@ export const useStore = create<StoreState>()(
           }),
 
         setPeaks: (peaks) => set({ peaks }),
+        setSaveStatus: (saveStatus) => set({ saveStatus }),
 
         // ── grid ──────────────────────────────────────────────────────────
         setGrid: (partial) => mutate({ grid: { ...get().core.grid, ...partial } }),
@@ -240,6 +339,26 @@ export const useStore = create<StoreState>()(
         setLaneWidth: (px) => {
           if (px > 0 && px !== get().laneWidth) set({ laneWidth: px });
         },
+        setGutterWidth: (px) => {
+          const w = clampGutter(px);
+          if (w === get().gutterWidth) return;
+          try {
+            localStorage.setItem(GUTTER_KEY, String(w));
+          } catch {
+            /* storage unavailable — keep the in-memory value */
+          }
+          set({ gutterWidth: w });
+        },
+        setPrepWidth: (px) => {
+          const w = clampPrep(px);
+          if (w === get().prepWidth) return;
+          try {
+            localStorage.setItem(PREP_KEY, String(w));
+          } catch {
+            /* storage unavailable */
+          }
+          set({ prepWidth: w });
+        },
         zoomBy: (factor, focalX) => {
           const { view, laneWidth } = get();
           const fx = focalX ?? laneWidth / 2;
@@ -256,23 +375,82 @@ export const useStore = create<StoreState>()(
           const pps = Math.min(4000, Math.max(2, laneWidth / Math.max(0.001, dur)));
           set((s) => ({ view: { ...s.view, pixelsPerSecond: pps, scrollSec: 0 } }));
         },
+        zoomToSelection: () => {
+          const { laneWidth, selection, core } = get();
+          if (selection.length === 0) return;
+          const sel = new Set(selection);
+          const blocks = core.blocks.filter((b) => sel.has(b.id));
+          if (blocks.length === 0) return;
+          let t0 = Infinity;
+          let t1 = -Infinity;
+          for (const b of blocks) {
+            t0 = Math.min(t0, b.start);
+            t1 = Math.max(t1, b.end);
+          }
+          let span = t1 - t0;
+          if (!(span > 1e-3)) {
+            // Zero-length selection (e.g. a single point cue): frame ~2 bars around it.
+            span = barSpan(core.grid) * 2;
+            t0 = t0 - span / 2;
+          }
+          const pad = span * 0.08; // breathing room on each side
+          const visible = span + pad * 2;
+          const pps = Math.min(4000, Math.max(2, laneWidth / Math.max(0.001, visible)));
+          const scrollSec = Math.max(0, t0 - pad);
+          set((s) => ({ view: { ...s.view, pixelsPerSecond: pps, scrollSec } }));
+        },
 
         // ── playback mirror ────────────────────────────────────────────────
         setPlayback: (partial) => set((s) => ({ playback: { ...s.playback, ...partial } })),
 
-        // ── rows ────────────────────────────────────────────────────────────
-        addCueRow: () => {
-          const order = nextCueOrder(get().core.rows);
-          const row = makeCueRow(order, cueRowCount(get().core.rows));
-          mutate({ rows: [...get().core.rows, row] });
+        // ── rows & groups ─────────────────────────────────────────────────────
+        addCueRow: (parentId = null) => {
+          const rows = get().core.rows;
+          const row = makeCueRow(nextSiblingOrder(rows, parentId), cueRowCount(rows), parentId);
+          mutate({ rows: normalizeTree([...rows, row]) });
+          return row.id;
+        },
+
+        addGroup: (parentId = null) => {
+          const rows = get().core.rows;
+          const count = rows.filter((r) => r.kind === 'group').length;
+          const row = makeGroupRow(nextSiblingOrder(rows, parentId), count, parentId);
+          mutate({ rows: normalizeTree([...rows, row]) });
           return row.id;
         },
 
         removeRow: (rowId) => {
           const row = get().core.rows.find((r) => r.id === rowId);
-          if (!row || row.kind !== 'cue') return; // fixed rows are not removable
-          const rows = normalizeOrders(get().core.rows.filter((r) => r.id !== rowId));
+          if (!row || row.kind !== 'cue') return; // fixed rows / groups handled elsewhere
+          const rows = normalizeTree(get().core.rows.filter((r) => r.id !== rowId));
           const blocks = get().core.blocks.filter((b) => b.rowId !== rowId);
+          mutate({ rows, blocks });
+          set((s) => ({ selection: s.selection.filter((id) => blocks.some((b) => b.id === id)) }));
+        },
+
+        removeGroup: (groupId, mode) => {
+          const all = get().core.rows;
+          const group = all.find((r) => r.id === groupId);
+          if (!group || group.kind !== 'group') return;
+          if (mode === 'ungroup') {
+            // Promote direct children to the group's parent at its slot, then drop the group.
+            const next = all
+              .filter((r) => r.id !== groupId)
+              .map((r) =>
+                r.parentId === groupId
+                  ? { ...r, parentId: group.parentId, order: group.order + (r.order + 1) * 1e-3 }
+                  : r,
+              );
+            mutate({ rows: normalizeTree(next) });
+            return;
+          }
+          // delete: remove the whole subtree and the blocks on any removed cue rows.
+          const ids = subtreeIds(all, groupId);
+          const removedCueIds = new Set(
+            all.filter((r) => ids.has(r.id) && r.kind === 'cue').map((r) => r.id),
+          );
+          const rows = normalizeTree(all.filter((r) => !ids.has(r.id)));
+          const blocks = get().core.blocks.filter((b) => !removedCueIds.has(b.rowId));
           mutate({ rows, blocks });
           set((s) => ({ selection: s.selection.filter((id) => blocks.some((b) => b.id === id)) }));
         },
@@ -282,19 +460,55 @@ export const useStore = create<StoreState>()(
             rows: get().core.rows.map((r) => (r.id === rowId ? { ...r, ...partial } : r)),
           }),
 
+        toggleCollapse: (groupId) =>
+          mutate({
+            rows: get().core.rows.map((r) =>
+              r.id === groupId && r.kind === 'group' ? { ...r, collapsed: !r.collapsed } : r,
+            ),
+          }),
+
         moveRow: (rowId, dir) => {
-          const rows = [...get().core.rows].sort((a, b) => a.order - b.order);
-          const cues = rows.filter((r) => r.kind === 'cue');
-          const idx = cues.findIndex((r) => r.id === rowId);
-          if (idx < 0) return;
+          const rows = get().core.rows;
+          const row = rows.find((r) => r.id === rowId);
+          if (!row || row.kind === 'track' || row.kind === 'section') return;
+          const siblings = movableSiblings(rows, row.parentId ?? null);
+          const idx = siblings.findIndex((r) => r.id === rowId);
           const swapWith = idx + dir;
-          if (swapWith < 0 || swapWith >= cues.length) return;
-          const reordered = [...cues];
-          [reordered[idx], reordered[swapWith]] = [reordered[swapWith], reordered[idx]];
-          mutate({ rows: applyCueOrder(get().core.rows, reordered.map((r) => r.id)) });
+          if (idx < 0 || swapWith < 0 || swapWith >= siblings.length) return;
+          const ids = siblings.map((r) => r.id);
+          [ids[idx], ids[swapWith]] = [ids[swapWith], ids[idx]];
+          get().reorderSiblings(row.parentId ?? null, ids);
         },
 
-        reorderCueRows: (ids) => mutate({ rows: applyCueOrder(get().core.rows, ids) }),
+        setParent: (rowId, newParentId, index) => {
+          const rows = get().core.rows;
+          const row = rows.find((r) => r.id === rowId);
+          if (!row || row.kind === 'track' || row.kind === 'section') return;
+          if (newParentId !== null) {
+            const target = rows.find((r) => r.id === newParentId);
+            if (!target || target.kind !== 'group') return;
+            if (newParentId === rowId || isDescendant(rows, rowId, newParentId)) return; // no cycle
+          }
+          const dest = movableSiblings(rows, newParentId).filter((r) => r.id !== rowId);
+          const clamped = Math.max(0, Math.min(index ?? dest.length, dest.length));
+          let order: number;
+          if (dest.length === 0) order = 0;
+          else if (clamped === 0) order = dest[0].order - 0.5;
+          else if (clamped >= dest.length) order = dest[dest.length - 1].order + 0.5;
+          else order = (dest[clamped - 1].order + dest[clamped].order) / 2;
+          const next = rows.map((r) => (r.id === rowId ? { ...r, parentId: newParentId, order } : r));
+          mutate({ rows: normalizeTree(next) });
+        },
+
+        reorderSiblings: (parentId, idsInOrder) => {
+          const pos = new Map(idsInOrder.map((id, i) => [id, i]));
+          const next = get().core.rows.map((r) =>
+            (r.parentId ?? null) === parentId && pos.has(r.id) ? { ...r, order: pos.get(r.id)! } : r,
+          );
+          mutate({ rows: normalizeTree(next) });
+        },
+
+        reorderCueRows: (ids) => get().reorderSiblings(null, ids),
 
         // ── blocks ────────────────────────────────────────────────────────
         addBlock: (rowId, start, end, label = '') => {
@@ -319,13 +533,19 @@ export const useStore = create<StoreState>()(
             blocks: get().core.blocks.map((b) => (b.id === id ? normalizeBlock({ ...b, ...partial }) : b)),
           }),
 
-        moveBlock: (id, newStart) =>
+        moveBlock: (id, newStart, rowId) =>
           mutate({
             blocks: get().core.blocks.map((b) => {
               if (b.id !== id) return b;
               const dur = b.end - b.start;
               const start = Math.max(0, newStart);
-              return { ...b, start, end: start + dur };
+              let nextRow = b.rowId;
+              if (rowId && rowId !== b.rowId) {
+                const target = get().core.rows.find((r) => r.id === rowId);
+                // Only block-holding lanes (cue/section) can receive a moved cue.
+                if (target && (target.kind === 'cue' || target.kind === 'section')) nextRow = rowId;
+              }
+              return { ...b, rowId: nextRow, start, end: start + dur };
             }),
           }),
 
@@ -334,15 +554,14 @@ export const useStore = create<StoreState>()(
             blocks: get().core.blocks.map((b) => {
               if (b.id !== id) return b;
               const t = Math.max(0, time);
+              // Collapsing a cue to zero duration turns it into a milestone (a point
+              // marker); dragging it back out to any positive duration makes it ranged.
               if (edge === 'start') {
                 const start = Math.min(t, b.end);
-                const isPoint = b.isPoint && start === b.end;
-                return { ...b, start, isPoint: start < b.end ? false : isPoint };
-              } else {
-                const end = Math.max(t, b.start);
-                const isPoint = b.isPoint && end === b.start;
-                return { ...b, end, isPoint: end > b.start ? false : isPoint };
+                return { ...b, start, isPoint: start >= b.end };
               }
+              const end = Math.max(t, b.start);
+              return { ...b, end, isPoint: end <= b.start };
             }),
           }),
 
@@ -462,6 +681,23 @@ export function endHistoryGroup(): void {
   store.temporal.getState().resume();
 }
 
+/**
+ * Apply a collaborator's core document without recording it in THIS user's undo history.
+ * Pausing the temporal store around the set means zundo never pushes a `pastStates` entry for
+ * the remote change — so remote edits can't be "undone" locally and don't bury the user's own
+ * history. (Mirrors the pause/resume that {@link beginHistoryGroup} uses for gestures.)
+ */
+export function applyRemoteCoreNoHistory(core: ProjectCore): void {
+  const t = store.temporal.getState();
+  const wasTracking = t.isTracking;
+  t.pause();
+  try {
+    useStore.getState().applyRemoteCore(core);
+  } finally {
+    if (wasTracking) store.temporal.getState().resume();
+  }
+}
+
 export function undo(): void {
   store.temporal.getState().undo();
 }
@@ -489,38 +725,8 @@ function barSpan(grid: BeatGrid): number {
 
 function normalizeBlock(b: Block): Block {
   if (b.isPoint) return { ...b, end: b.start };
-  if (b.end < b.start) return { ...b, end: b.start };
+  // A zero- (or negative-) duration ranged cue collapses to a milestone marker.
+  if (b.end <= b.start) return { ...b, isPoint: true, end: b.start };
   return b;
 }
 
-/** Ensure track=0, section=1, and cue rows get unique orders >= 2 by current order. */
-function normalizeOrders(rows: Row[]): Row[] {
-  const track = rows.find((r) => r.kind === 'track');
-  const section = rows.find((r) => r.kind === 'section');
-  const cues = rows.filter((r) => r.kind === 'cue').sort((a, b) => a.order - b.order);
-  const out: Row[] = [];
-  if (track) out.push({ ...track, order: 0 });
-  if (section) out.push({ ...section, order: 1 });
-  cues.forEach((r, i) => out.push({ ...r, order: i + 2 }));
-  return out;
-}
-
-/** Apply a new cue-row ordering (by id) to the rows array, keeping fixed rows pinned. */
-function applyCueOrder(rows: Row[], cueIdsInOrder: string[]): Row[] {
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  const track = rows.find((r) => r.kind === 'track');
-  const section = rows.find((r) => r.kind === 'section');
-  const out: Row[] = [];
-  if (track) out.push({ ...track, order: 0 });
-  if (section) out.push({ ...section, order: 1 });
-  cueIdsInOrder.forEach((id, i) => {
-    const r = byId.get(id);
-    if (r && r.kind === 'cue') out.push({ ...r, order: i + 2 });
-  });
-  // append any cue rows not mentioned (safety) keeping them after
-  let order = out.length;
-  for (const r of rows) {
-    if (r.kind === 'cue' && !cueIdsInOrder.includes(r.id)) out.push({ ...r, order: order++ });
-  }
-  return out;
-}
