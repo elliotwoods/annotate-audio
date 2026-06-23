@@ -8,7 +8,7 @@ import { SignInGate } from './ui/SignInGate';
 import { useKeyboard } from './hooks/useKeyboard';
 import { useCollab } from './hooks/useCollab';
 import { applyPersistedMute } from './hooks/useSoundToggle';
-import { useProjectId, useHasShareableContent } from './store/selectors';
+import { useProjectId, useProjectName, useHasShareableContent } from './store/selectors';
 import { startAutosave } from './persistence/autosave';
 import { startCloudAutosave } from './persistence/cloudAutosave';
 import { listProjects } from './persistence/db';
@@ -40,8 +40,16 @@ export default function App() {
   // Live collaboration for the current (cloud) project. Mounted unconditionally to keep hook
   // order stable; it stays inert for a non-cloud project (no tokens → no channel).
   const projectId = useProjectId();
+  const projectName = useProjectName();
   const hasShareableContent = useHasShareableContent();
   const collab = useCollab(projectId);
+
+  // Reflect the current project name in the browser tab title. The static <title> from the
+  // root layout only ever shows the app name, so keep it in sync as the project loads/renames.
+  // Falls back to the bare app name when the project is unnamed.
+  useEffect(() => {
+    document.title = projectName ? `${projectName} · Cue Timeline` : 'Cue Timeline';
+  }, [projectName]);
 
   // A session is "active" once the user has signed in OR is here on a share link. The editor and
   // all its persistence/sharing machinery only run for an active session.
