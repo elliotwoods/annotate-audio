@@ -4,6 +4,7 @@ import { TopBar } from './ui/TopBar';
 import { Timeline } from './ui/Timeline';
 import { Transport } from './ui/Transport';
 import { StartDialog } from './ui/StartDialog';
+import { SignInGate } from './ui/SignInGate';
 import { useKeyboard } from './hooks/useKeyboard';
 import { useCollab } from './hooks/useCollab';
 import { applyPersistedMute } from './hooks/useSoundToggle';
@@ -13,7 +14,8 @@ import { startCloudAutosave } from './persistence/cloudAutosave';
 import { listProjects } from './persistence/db';
 import { loadProjectWithAudio } from './audio/audioFile';
 import { openCloudProject } from './persistence/cloudSync';
-import { rememberTokens } from './auth/session';
+import { isVerified, rememberTokens } from './auth/session';
+import { onCloudChanged } from './auth/cloudSignal';
 import { ensureShareableUrl } from './auth/shareUrl';
 
 /** Parse a shared-link request from the URL: ?p=<id>&v=<viewToken>&e=<editToken>. */
@@ -30,16 +32,34 @@ export default function App() {
   // Capture any incoming share link ONCE, synchronously during the first render, before the
   // url-reflection effect below can rewrite the address bar.
   const [bootLink] = useState(readShareLink);
+  // A bare base-URL visitor must sign in before they get an editor or can create a set; a
+  // share-link recipient bypasses the gate entirely (their token is the session credential).
+  const [authed, setAuthed] = useState(() => isVerified() || !!bootLink);
   useKeyboard();
 
-  // Live collaboration for the current (cloud) project.
+  // Live collaboration for the current (cloud) project. Mounted unconditionally to keep hook
+  // order stable; it stays inert for a non-cloud project (no tokens → no channel).
   const projectId = useProjectId();
   const hasShareableContent = useHasShareableContent();
   const collab = useCollab(projectId);
 
-  // Autosave for the whole session (local IndexedDB + automatic cloud snapshots).
-  useEffect(() => startAutosave(), []);
-  useEffect(() => startCloudAutosave(), []);
+  // A session is "active" once the user has signed in OR is here on a share link. The editor and
+  // all its persistence/sharing machinery only run for an active session.
+  const sessionActive = authed || !!bootLink;
+
+  // Re-derive auth when cloud access changes (e.g. signing out via the TopBar drops the editor
+  // back to the gate; signing in / publishing keeps it).
+  useEffect(() => onCloudChanged(() => setAuthed(isVerified() || !!bootLink)), [bootLink]);
+
+  // Autosave for an active session (local IndexedDB + automatic cloud snapshots).
+  useEffect(() => {
+    if (!sessionActive) return;
+    return startAutosave();
+  }, [sessionActive]);
+  useEffect(() => {
+    if (!sessionActive) return;
+    return startCloudAutosave();
+  }, [sessionActive]);
 
   // Apply the persisted per-device mute preference once on boot.
   useEffect(() => applyPersistedMute(), []);
@@ -50,33 +70,41 @@ export default function App() {
   // Re-runs when the project changes OR first gains shareable content (audio/blocks), so a set
   // built up within one session also gets published once there's something to share.
   useEffect(() => {
+    if (!sessionActive) return;
     void ensureShareableUrl(projectId);
-  }, [projectId, hasShareableContent]);
+  }, [projectId, hasShareableContent, sessionActive]);
 
-  // On boot: a shared link (?p=…) takes precedence; otherwise reopen the most recent local
-  // project, else offer the start dialog.
+  // Boot — share link: a ?p=… link takes precedence and opens that cloud set directly, for
+  // verified users and unauthenticated recipients alike. Runs once (bootLink never changes).
   useEffect(() => {
+    const link = bootLink;
+    if (!link) return;
     let cancelled = false;
     (async () => {
-      const link = bootLink;
-      if (link) {
-        // Persist any tokens from the link. The url-reflection effect re-normalises the
-        // address bar to the canonical share link once the project loads.
-        if (link.view) rememberTokens(link.id, { view: link.view });
-        if (link.edit) rememberTokens(link.id, { edit: link.edit });
-        try {
-          const r = await openCloudProject(link.id);
-          if (cancelled) return;
-          if (!r.audioReady) {
-            setBanner('Opened set, but its audio could not be loaded.');
-          }
-        } catch (err) {
-          if (cancelled) return;
-          setBanner(`Could not open the shared set: ${(err as Error).message}`);
-        }
-        return;
+      // Persist any tokens from the link. The url-reflection effect re-normalises the address
+      // bar to the canonical share link once the project loads.
+      if (link.view) rememberTokens(link.id, { view: link.view });
+      if (link.edit) rememberTokens(link.id, { edit: link.edit });
+      try {
+        const r = await openCloudProject(link.id);
+        if (cancelled) return;
+        if (!r.audioReady) setBanner('Opened set, but its audio could not be loaded.');
+      } catch (err) {
+        if (cancelled) return;
+        setBanner(`Could not open the shared set: ${(err as Error).message}`);
       }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bootLink]);
 
+  // Boot — signed-in landing: with no share link, reopen the most recent local project once the
+  // user is authed, else offer the start dialog. Re-runs when a fresh sign-in flips `authed`.
+  useEffect(() => {
+    if (!authed || bootLink) return;
+    let cancelled = false;
+    (async () => {
       try {
         const recents = await listProjects();
         if (cancelled) return;
@@ -92,7 +120,11 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [bootLink]);
+  }, [authed, bootLink]);
+
+  if (!authed && !bootLink) {
+    return <SignInGate onSignedIn={() => setAuthed(true)} />;
+  }
 
   return (
     <div className="app">

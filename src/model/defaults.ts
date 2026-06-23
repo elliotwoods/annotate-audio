@@ -111,6 +111,16 @@ export function makeBlock(rowId: string, start: number, end: number, label = '')
   };
 }
 
+/**
+ * Copy a block with a fresh id, deep-cloning its curve so the copy and original never share
+ * point arrays. `patch` overrides any fields (e.g. rowId / start / end) on the clone. Used by
+ * copy/paste and duplicate.
+ */
+export function cloneBlock(b: Block, patch: Partial<Block> = {}): Block {
+  const curve = b.curve ? { type: b.curve.type, points: b.curve.points.map((p) => ({ ...p })) } : undefined;
+  return { ...b, curve, ...patch, id: uuid() };
+}
+
 /** A fresh project: the two fixed rows, one empty cue row, default grid, no audio. */
 export function makeProject(name = 'Untitled Show'): Project {
   const track = makeTrackRow();

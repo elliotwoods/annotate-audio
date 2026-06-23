@@ -11,11 +11,14 @@ import {
 import { useStore, beginHistoryGroup, endHistoryGroup } from '../store/store';
 import { snapTimeWith, cueEdgeTimes, type SnapContext, type SnapResult } from '../core/snap';
 import { timeToX, xToTime } from '../core/transform';
+import { barLen } from '../core/grid';
 import { heldValueAt, type HeldCue } from '../core/curve';
 import { blockHeightForLabel, labelLineCount, rowHeightForBlocks, CURVE_BLOCK_H } from './metrics';
 import { RowGutter } from './RowGutter';
 import { BlockView } from './BlockView';
 import { useRowDnD } from './useRowDnD';
+import { useMarquee } from './useMarquee';
+import { setPointerTime } from './pointerTime';
 import './Lanes.css';
 
 interface RowChrome {
@@ -32,6 +35,7 @@ export function Lanes(): JSX.Element {
 
   const lanesRef = useRef<HTMLDivElement>(null);
   const { draggingSubtree, indicator, onGripPointerDown } = useRowDnD(lanesRef);
+  const { onMarqueeStart, overlay } = useMarquee(lanesRef);
 
   return (
     <div className="lanes" ref={lanesRef}>
@@ -46,8 +50,18 @@ export function Lanes(): JSX.Element {
             onGripPointerDown,
           };
           if (row.kind === 'group') return <GroupLane key={row.id} row={row} laneWidth={laneWidth} chrome={chrome} />;
-          return <CueLane key={row.id} row={row} laneWidth={laneWidth} chrome={chrome} />;
+          return (
+            <CueLane
+              key={row.id}
+              row={row}
+              laneWidth={laneWidth}
+              chrome={chrome}
+              onMarqueeStart={onMarqueeStart}
+            />
+          );
         })}
+
+      {overlay}
 
       {indicator && (
         <div
@@ -175,11 +189,6 @@ function tint(hex: string): string {
 
 // ── Cue / Section row (interactive lane) ─────────────────────────────────────
 
-interface PreviewRect {
-  start: number;
-  end: number;
-}
-
 /** A touching boundary where ranged cue(s) end and ranged cue(s) begin at the same time. */
 interface CueInterface {
   time: number;
@@ -189,7 +198,17 @@ interface CueInterface {
   nextIds: string[];
 }
 
-function CueLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chrome: RowChrome }): JSX.Element {
+function CueLane({
+  row,
+  laneWidth,
+  chrome,
+  onMarqueeStart,
+}: {
+  row: Row;
+  laneWidth: number;
+  chrome: RowChrome;
+  onMarqueeStart: (e: React.PointerEvent) => void;
+}): JSX.Element {
   const blocks = useBlocksByRow(row.id);
   const view = useView();
   const grid = useGrid();
@@ -197,12 +216,9 @@ function CueLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chro
   const selection = useStore((s) => s.selection);
 
   const addBlock = useStore((s) => s.addBlock);
-  const addPointCue = useStore((s) => s.addPointCue);
-  const clearSelection = useStore((s) => s.clearSelection);
   const resizeBlock = useStore((s) => s.resizeBlock);
 
   const laneRef = useRef<HTMLDivElement>(null);
-  const [preview, setPreview] = useState<PreviewRect | null>(null);
   // Height the in-progress label editor needs, so the row grows live while typing.
   const [editHeight, setEditHeight] = useState(0);
 
@@ -272,7 +288,6 @@ function CueLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chro
 
   const heldStroke = `rgba(${rgbTriplet(row.color) ?? '255, 255, 255'}, 0.6)`;
 
-  const gesture = useRef<{ startClientX: number; rowId: string; cueTimes: number[] } | null>(null);
   const iface = useRef<{
     startClientX: number;
     priorIds: string[];
@@ -300,62 +315,25 @@ function CueLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chro
     return snapTimeWith(t, ctx);
   };
 
-  const handlersRef = useRef({
-    move(e: PointerEvent) {
-      const g = gesture.current;
-      if (!g) return;
-      const startT = Math.max(0, maybeSnap(clientXToTime(g.startClientX), e.altKey, g.cueTimes).value);
-      const endR = maybeSnap(clientXToTime(e.clientX), e.altKey, g.cueTimes);
-      const t = Math.max(0, endR.value);
-      setPreview({ start: Math.min(startT, t), end: Math.max(startT, t) });
-      // Indicate the snap on the edge the user is actively dragging (the moving endpoint).
-      useStore.getState().setSnapIndicator(endR.guide);
-    },
-    up(e: PointerEvent) {
-      window.removeEventListener('pointermove', handlersRef.current.move);
-      window.removeEventListener('pointerup', handlersRef.current.up);
-      window.removeEventListener('pointercancel', handlersRef.current.up);
-      const lane = laneRef.current;
-      if (lane?.hasPointerCapture(e.pointerId)) lane.releasePointerCapture(e.pointerId);
-
-      const g = gesture.current;
-      gesture.current = null;
-      setPreview(null);
-      useStore.getState().setSnapIndicator(null); // hide the guide when the gesture ends
-      if (!g) return;
-
-      if (Math.abs(e.clientX - g.startClientX) <= 3) {
-        clearSelection();
-        return;
-      }
-      const startT = Math.max(0, maybeSnap(clientXToTime(g.startClientX), e.altKey, g.cueTimes).value);
-      const t = Math.max(0, maybeSnap(clientXToTime(e.clientX), e.altKey, g.cueTimes).value);
-      const a = Math.min(startT, t);
-      const b = Math.max(startT, t);
-      if (b > a) addBlock(g.rowId, a, b);
-    },
-  });
-
+  // Empty-lane drag → marquee selection (handled by the parent, spanning all rows). A plain
+  // click (sub-threshold drag) clears the selection; both are decided in the marquee hook.
   const onLanePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
-    if (e.target !== e.currentTarget) return;
-    e.preventDefault();
-    gesture.current = {
-      startClientX: e.clientX,
-      rowId: row.id,
-      cueTimes: cueEdgeTimes(useStore.getState().core.blocks),
-    };
-    laneRef.current?.setPointerCapture(e.pointerId);
-    window.addEventListener('pointermove', handlersRef.current.move);
-    window.addEventListener('pointerup', handlersRef.current.up);
-    window.addEventListener('pointercancel', handlersRef.current.up);
+    if (e.target !== e.currentTarget) return; // ignore clicks that land on a block / roll handle
+    onMarqueeStart(e);
   };
 
+  // Track the hovered time so a paste (Ctrl/⌘+V) can land under the cursor, snapped.
+  const onLanePointerMove = (e: React.PointerEvent) => {
+    setPointerTime(clientXToTime(e.clientX));
+  };
+
+  // Double-click creates a new ranged cue ~1 bar long, snapped to the grid/cues at the click.
   const onLaneDoubleClick = (e: React.MouseEvent) => {
     if (e.target !== e.currentTarget) return;
     const cueTimes = cueEdgeTimes(useStore.getState().core.blocks);
     const t = Math.max(0, maybeSnap(clientXToTime(e.clientX), e.altKey, cueTimes).value);
-    addPointCue(row.id, t);
+    addBlock(row.id, t, t + barLen(grid));
   };
 
   // ── interface "roll" drag (move a shared boundary, resizing both neighbours) ──
@@ -392,7 +370,7 @@ function CueLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chro
   const onInterfacePointerDown = (e: React.PointerEvent, itf: CueInterface) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    e.stopPropagation(); // don't start a lane create-gesture
+    e.stopPropagation(); // don't start a lane marquee
     const all = useStore.getState().core.blocks;
     const involved = new Set([...itf.priorIds, ...itf.nextIds]);
     const priors = all.filter((b) => itf.priorIds.includes(b.id));
@@ -417,9 +395,6 @@ function CueLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chro
     window.addEventListener('pointercancel', ifaceHandlersRef.current.up);
   };
 
-  const previewLeft = preview ? timeToX(preview.start, view) : 0;
-  const previewWidth = preview ? Math.max(2, (preview.end - preview.start) * view.pixelsPerSecond) : 0;
-
   return (
     <div
       className={`lanes__strip${chrome.dragging ? ' dragging' : ''}`}
@@ -439,6 +414,7 @@ function CueLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chro
         data-lane-rowid={row.id}
         style={{ width: laneWidth }}
         onPointerDown={onLanePointerDown}
+        onPointerMove={onLanePointerMove}
         onDoubleClick={onLaneDoubleClick}
       >
         {heldLine && (
@@ -467,12 +443,6 @@ function CueLane({ row, laneWidth, chrome }: { row: Row; laneWidth: number; chro
             aria-hidden="true"
           />
         ))}
-        {preview && (
-          <div
-            className="lanes__preview"
-            style={{ left: previewLeft, width: previewWidth, borderColor: row.color }}
-          />
-        )}
       </div>
     </div>
   );

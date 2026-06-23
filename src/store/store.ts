@@ -43,15 +43,17 @@ import {
 } from '../core/curve';
 import {
   makeBlock,
+  cloneBlock,
   makeCueRow,
   makeGroupRow,
   makeProject,
   joinProject,
   splitProject,
 } from '../model/defaults';
-import { snapTime } from '../core/grid';
-import type { SnapGuide } from '../core/snap';
+import { snapTime, beatLen } from '../core/grid';
+import { snapTimeWith, cueEdgeTimes, type SnapContext, type SnapGuide } from '../core/snap';
 import { xToTime, clampScroll } from '../core/transform';
+import { contentDuration } from '../core/contentExtent';
 import { normalizeTree, isDescendant, subtreeIds } from '../core/rowtree';
 import type { PeaksData } from '../audio/peaksTypes';
 
@@ -99,6 +101,8 @@ export interface StoreState {
   view: ViewState;
   playback: PlaybackState;
   selection: string[];
+  /** In-memory copy/cut buffer of blocks (transient; not persisted/undone). */
+  clipboard: Block[];
   detection: DetectionState | null;
   /** Measured pixel width of the lane area (transient; not persisted/undone). */
   laneWidth: number;
@@ -116,6 +120,9 @@ export interface StoreState {
   cloudSave: CloudSaveStatus;
   /** Epoch ms of the last successful cloud save, or null (transient). */
   cloudSavedAt: number | null;
+  /** Human-readable detail for the most recent cloud-save failure (transient), or null. Shown
+   *  when the user clicks the "Cloud save failed" indicator. */
+  cloudSaveError: string | null;
   /** Active snap-guide target shown during a drag/resize, or null (transient). */
   snapIndicator: SnapGuide | null;
   /**
@@ -142,7 +149,10 @@ export interface StoreState {
   setPeaks: (peaks: PeaksData | null) => void;
   setAudioLoading: (state: AudioLoadProgress | null) => void;
   setSaveStatus: (status: SaveStatus) => void;
-  setCloudSave: (status: CloudSaveStatus, at?: number | null) => void;
+  setCloudSave: (
+    status: CloudSaveStatus,
+    detail?: { at?: number | null; error?: string | null },
+  ) => void;
 
   // ── grid ────────────────────────────────────────────────────────────────
   setGrid: (partial: Partial<BeatGrid>) => void;
@@ -200,6 +210,8 @@ export interface StoreState {
   updateBlock: (id: string, partial: Partial<Omit<Block, 'id' | 'rowId'>>) => void;
   /** Move a cue horizontally (newStart) and optionally to another row (cue/section lane). */
   moveBlock: (id: string, newStart: number, rowId?: string) => void;
+  /** Move several cues to new starts at once (durations preserved, no row change) — group drag. */
+  moveBlocks: (updates: { id: string; start: number }[]) => void;
   resizeBlock: (id: string, edge: 'start' | 'end', time: number) => void;
   setBlockLabel: (id: string, label: string) => void;
   toggleBlockPoint: (id: string) => void;
@@ -224,6 +236,20 @@ export interface StoreState {
   selectBlock: (id: string, additive?: boolean) => void;
   setSelection: (ids: string[]) => void;
   clearSelection: () => void;
+
+  // ── clipboard ─────────────────────────────────────────────────────────────
+  /** Copy the current selection into the in-memory clipboard (no history). */
+  copySelection: () => void;
+  /** Copy the selection, then delete it (one undo step). */
+  cutSelection: () => void;
+  /**
+   * Paste the clipboard. The earliest copied cue is anchored at `anchorTime` (snapped),
+   * falling back to the playhead; relative timing between cues and their original rows are
+   * preserved. New cues become the selection.
+   */
+  paste: (anchorTime?: number) => void;
+  /** Duplicate the selection directly after each cue (ranged: butted; point: +1 beat). */
+  duplicateSelection: () => void;
 
   // ── commands ──────────────────────────────────────────────────────────────
   /** Pull every block onto the current grid (spec §5.2 opt-in re-snap). */
@@ -312,6 +338,7 @@ export const useStore = create<StoreState>()(
         view: makeProject().view,
         playback: { isPlaying: false, positionSec: 0 },
         selection: [],
+        clipboard: [],
         detection: null,
         laneWidth: 800,
         gutterWidth: loadGutterWidth(),
@@ -321,6 +348,7 @@ export const useStore = create<StoreState>()(
         saveStatus: 'idle',
         cloudSave: 'idle',
         cloudSavedAt: null,
+        cloudSaveError: null,
         snapIndicator: null,
         historyLabel: 'Opened',
 
@@ -331,6 +359,7 @@ export const useStore = create<StoreState>()(
             core: { ...core, updatedAt: now() },
             view,
             selection: [],
+            clipboard: [],
             detection: null,
             peaks: null,
             playback: { isPlaying: false, positionSec: 0 },
@@ -347,6 +376,7 @@ export const useStore = create<StoreState>()(
             core: { ...core, rows: normalizeTree(core.rows) },
             view,
             selection: [],
+            clipboard: [],
             detection: null,
             peaks: null,
             playback: { isPlaying: false, positionSec: 0 },
@@ -398,8 +428,17 @@ export const useStore = create<StoreState>()(
         setPeaks: (peaks) => set({ peaks }),
         setAudioLoading: (audioLoading) => set({ audioLoading }),
         setSaveStatus: (saveStatus) => set({ saveStatus }),
-        setCloudSave: (cloudSave, at) =>
-          set(at === undefined ? { cloudSave } : { cloudSave, cloudSavedAt: at }),
+        setCloudSave: (cloudSave, detail) =>
+          set({
+            cloudSave,
+            cloudSavedAt: detail?.at !== undefined ? detail.at : get().cloudSavedAt,
+            // Keep an error detail only while in the error state; clear it on any recovery so a
+            // stale message never lingers behind a "Saved" chip.
+            cloudSaveError:
+              cloudSave === 'error'
+                ? (detail?.error ?? get().cloudSaveError ?? 'Cloud save failed.')
+                : null,
+          }),
 
         // ── grid ──────────────────────────────────────────────────────────
         setGrid: (partial) => mutate({ grid: { ...get().core.grid, ...partial } }, 'Edit grid'),
@@ -671,6 +710,20 @@ export const useStore = create<StoreState>()(
             }),
           }, 'Move block'),
 
+        moveBlocks: (updates) => {
+          if (updates.length === 0) return;
+          const next = new Map(updates.map((u) => [u.id, u.start]));
+          mutate({
+            blocks: get().core.blocks.map((b) => {
+              const ns = next.get(b.id);
+              if (ns === undefined) return b;
+              const dur = b.end - b.start;
+              const start = Math.max(0, ns);
+              return { ...b, start, end: start + dur };
+            }),
+          }, 'Move blocks');
+        },
+
         resizeBlock: (id, edge, time) =>
           mutate({
             blocks: get().core.blocks.map((b) => {
@@ -772,6 +825,83 @@ export const useStore = create<StoreState>()(
           }),
         setSelection: (ids) => set({ selection: ids }),
         clearSelection: () => set({ selection: [] }),
+
+        // ── clipboard ────────────────────────────────────────────────────
+        copySelection: () => {
+          const sel = new Set(get().selection);
+          if (sel.size === 0) return;
+          // Keep document order so paste lays the copies out deterministically.
+          set({ clipboard: get().core.blocks.filter((b) => sel.has(b.id)).map((b) => cloneBlock(b)) });
+        },
+
+        cutSelection: () => {
+          const sel = new Set(get().selection);
+          if (sel.size === 0) return;
+          const clipboard = get().core.blocks.filter((b) => sel.has(b.id)).map((b) => cloneBlock(b));
+          mutate(
+            { blocks: get().core.blocks.filter((b) => !sel.has(b.id)) },
+            `Cut ${sel.size} ${sel.size === 1 ? 'block' : 'blocks'}`,
+          );
+          set({ clipboard, selection: [] });
+        },
+
+        paste: (anchorTime) => {
+          const clip = get().clipboard;
+          if (clip.length === 0) return;
+          const { core, view } = get();
+          // Anchor at the given time (e.g. the mouse) else the playhead, snapped to grid/cues.
+          const raw = anchorTime ?? get().playback.positionSec ?? 0;
+          const ctx: SnapContext = {
+            grid: core.grid,
+            snap: view.snap,
+            pixelsPerSecond: view.pixelsPerSecond,
+            cueTimes: cueEdgeTimes(core.blocks),
+          };
+          const anchor = Math.max(0, snapTimeWith(raw, ctx).value);
+          const minStart = Math.min(...clip.map((b) => b.start));
+          const offset = anchor - minStart;
+          // Keep each copy on its original row if that row still holds cues, else the first cue row.
+          const rowOk = (id: string) => {
+            const r = core.rows.find((x) => x.id === id);
+            return !!r && (r.kind === 'cue' || r.kind === 'section');
+          };
+          const fallbackRow = core.rows.find((r) => r.kind === 'cue')?.id;
+          const news: Block[] = [];
+          for (const b of clip) {
+            const rowId = rowOk(b.rowId) ? b.rowId : fallbackRow;
+            if (!rowId) continue;
+            const start = Math.max(0, b.start + offset);
+            const end = b.isPoint ? start : Math.max(start, b.end + offset);
+            news.push(cloneBlock(b, { rowId, start, end }));
+          }
+          if (news.length === 0) return;
+          mutate(
+            { blocks: [...core.blocks, ...news] },
+            `Paste ${news.length} ${news.length === 1 ? 'block' : 'blocks'}`,
+          );
+          set({ selection: news.map((b) => b.id) });
+        },
+
+        duplicateSelection: () => {
+          const sel = new Set(get().selection);
+          if (sel.size === 0) return;
+          const { core } = get();
+          const rawBeat = beatLen(core.grid);
+          const beat = Number.isFinite(rawBeat) && rawBeat > 0 ? rawBeat : 0.5;
+          const news: Block[] = [];
+          for (const b of core.blocks) {
+            if (!sel.has(b.id)) continue;
+            // "Directly after": a ranged copy butts onto the original's end; a point copy lands a beat later.
+            const offset = b.isPoint ? beat : b.end - b.start;
+            news.push(cloneBlock(b, { start: b.start + offset, end: b.end + offset }));
+          }
+          if (news.length === 0) return;
+          mutate(
+            { blocks: [...core.blocks, ...news] },
+            `Duplicate ${news.length} ${news.length === 1 ? 'block' : 'blocks'}`,
+          );
+          set({ selection: news.map((b) => b.id) });
+        },
 
         // ── commands ─────────────────────────────────────────────────────
         resnapAllToGrid: () => {
@@ -899,11 +1029,9 @@ export const temporalStore = store.temporal;
 
 // ── helpers (pure) ──────────────────────────────────────────────────────────
 
-/** Local copy of content-duration (selectors.ts has the public version; avoids a cycle). */
+/** Content-duration over the current state (the pure helper lives in core/contentExtent). */
 function contentDurationOf(s: StoreState): number {
-  if (s.core.audio) return s.core.audio.duration;
-  const maxEnd = s.core.blocks.reduce((m, b) => Math.max(m, b.end), 0);
-  return maxEnd > 0 ? maxEnd : 60;
+  return contentDuration(s.core.audio, s.core.blocks);
 }
 
 function barSpan(grid: BeatGrid): number {

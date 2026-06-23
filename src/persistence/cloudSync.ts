@@ -11,6 +11,7 @@ import {
   ensureAudioUploaded,
   fetchAudioBlob,
   loadCloudProject,
+  recoverProjectTokens,
   saveSnapshot,
   type CloudMeta,
 } from './cloud';
@@ -53,6 +54,10 @@ export async function saveCurrentToCloud(): Promise<SaveResult> {
       return { id: r.id, snapshotId: r.latest, created: true };
     } catch (err) {
       if (err instanceof CloudError && err.status === 409) {
+        // We own this set but don't hold its tokens locally (opened from the offline library
+        // or cleared storage). Recover them so Share / Sync / the share-URL light up, then
+        // append the snapshot.
+        await recoverProjectTokens(id);
         const { snapshotId } = await saveSnapshot(id, project);
         return { id, snapshotId, created: false };
       }

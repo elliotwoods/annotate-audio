@@ -6,6 +6,7 @@ import { useStore } from './store';
 import type { StoreState } from './store';
 import type { Block, Row } from '../model/types';
 import { flattenRows, type VisibleRow } from '../core/rowtree';
+import { contentDuration } from '../core/contentExtent';
 
 export const useView = () => useStore((s) => s.view);
 export const useGrid = () => useStore((s) => s.core.grid);
@@ -64,13 +65,12 @@ export function useSectionBoundaries(): number[] {
 }
 
 /**
- * Effective content duration in seconds: audio duration if loaded, else the furthest
- * block end, else a sensible default. Used for fit-to-window and scroll clamping.
+ * Effective content duration in seconds: the furthest of the audio end and the
+ * furthest cue end (cues can sit past the clip), else a sensible default. Used for
+ * fit-to-window, scroll clamping and the scrollbar. See {@link contentDuration}.
  */
 export function getContentDuration(s: StoreState): number {
-  if (s.core.audio) return s.core.audio.duration;
-  const maxEnd = s.core.blocks.reduce((m, b) => Math.max(m, b.end), 0);
-  return maxEnd > 0 ? maxEnd : 60;
+  return contentDuration(s.core.audio, s.core.blocks);
 }
 
 export function useContentDuration(): number {

@@ -134,6 +134,127 @@ describe('blocks', () => {
   });
 });
 
+describe('group move (moveBlocks)', () => {
+  it('shifts several blocks at once, preserving durations and clamping at 0', () => {
+    const cue = rowsByKind('cue')[0];
+    const a = s().addBlock(cue.id, 4, 6); // dur 2
+    const b = s().addBlock(cue.id, 10, 11); // dur 1
+    s().moveBlocks([
+      { id: a, start: 5 },
+      { id: b, start: 11 },
+    ]);
+    const ba = s().core.blocks.find((x) => x.id === a)!;
+    const bb = s().core.blocks.find((x) => x.id === b)!;
+    expect([ba.start, ba.end]).toEqual([5, 7]);
+    expect([bb.start, bb.end]).toEqual([11, 12]);
+    s().moveBlocks([{ id: a, start: -3 }]);
+    const ba2 = s().core.blocks.find((x) => x.id === a)!;
+    expect([ba2.start, ba2.end]).toEqual([0, 2]); // clamped, duration kept
+  });
+});
+
+describe('clipboard: copy / paste / cut', () => {
+  it('copy + paste makes new ids at the snapped anchor, keeping rows and relative timing', () => {
+    const cue = rowsByKind('cue')[0];
+    const a = s().addBlock(cue.id, 2, 4);
+    const b = s().addBlock(cue.id, 6, 7); // starts 4s after a
+    s().setSelection([a, b]);
+    s().copySelection();
+    s().paste(10); // 10 is already on a bar line (bar = 2s)
+    const news = s().core.blocks.filter((x) => x.id !== a && x.id !== b);
+    expect(news).toHaveLength(2);
+    expect(news.every((x) => x.rowId === cue.id)).toBe(true);
+    const starts = news.map((x) => x.start).sort((p, q) => p - q);
+    expect(starts[0]).toBeCloseTo(10, 6); // earliest copy anchored at 10
+    expect(starts[1]).toBeCloseTo(14, 6); // 4s gap preserved
+    expect(new Set(s().selection)).toEqual(new Set(news.map((x) => x.id)));
+  });
+
+  it('paste falls back to the first cue row when the source row is gone', () => {
+    const cue = rowsByKind('cue')[0];
+    const other = s().addCueRow();
+    const id = s().addBlock(other, 2, 4);
+    s().setSelection([id]);
+    s().copySelection();
+    s().removeRow(other); // drop the source row (and its block)
+    s().paste(2);
+    expect(s().core.blocks).toHaveLength(1);
+    expect(s().core.blocks[0].rowId).toBe(cue.id);
+  });
+
+  it('cut removes the originals, fills the clipboard, and pastes back as a new block', () => {
+    const cue = rowsByKind('cue')[0];
+    const a = s().addBlock(cue.id, 2, 4);
+    s().setSelection([a]);
+    s().cutSelection();
+    expect(s().core.blocks).toHaveLength(0);
+    expect(s().selection).toHaveLength(0);
+    s().paste(6);
+    expect(s().core.blocks).toHaveLength(1);
+    expect(s().core.blocks[0].id).not.toBe(a);
+    expect(s().core.blocks[0].start).toBeCloseTo(6, 6);
+  });
+
+  it('paste is a no-op with an empty clipboard', () => {
+    const cue = rowsByKind('cue')[0];
+    s().addBlock(cue.id, 2, 4);
+    s().paste(8);
+    expect(s().core.blocks).toHaveLength(1);
+  });
+});
+
+describe('duplicateSelection', () => {
+  it('places a ranged copy directly after the original (start === old end)', () => {
+    const cue = rowsByKind('cue')[0];
+    const a = s().addBlock(cue.id, 2, 5); // dur 3
+    s().setSelection([a]);
+    s().duplicateSelection();
+    const copy = s().core.blocks.find((x) => x.id !== a)!;
+    expect(copy.start).toBeCloseTo(5, 6);
+    expect(copy.end).toBeCloseTo(8, 6);
+    expect(copy.rowId).toBe(cue.id);
+    expect(s().selection).toEqual([copy.id]);
+  });
+
+  it('offsets a point-cue copy by one beat', () => {
+    const cue = rowsByKind('cue')[0];
+    const p = s().addPointCue(cue.id, 8);
+    s().setSelection([p]);
+    s().duplicateSelection();
+    const copy = s().core.blocks.find((x) => x.id !== p)!;
+    expect(copy.isPoint).toBe(true);
+    expect(copy.start).toBeCloseTo(8.5, 6); // +1 beat (0.5s at 120bpm)
+    expect(copy.end).toBeCloseTo(8.5, 6);
+  });
+
+  it('deep-clones the curve so copy and original are independent', () => {
+    const cue = rowsByKind('cue')[0];
+    const a = s().addBlock(cue.id, 2, 6);
+    s().setCueMode(a, 'curve');
+    s().setSelection([a]);
+    s().duplicateSelection();
+    const copy = s().core.blocks.find((x) => x.id !== a)!;
+    const orig = s().core.blocks.find((x) => x.id === a)!;
+    expect(copy.curve).toBeDefined();
+    expect(copy.curve!.points).not.toBe(orig.curve!.points); // not a shared array
+  });
+});
+
+describe('clipboard undo', () => {
+  it('undo/redo reverts a duplicate in one step', () => {
+    const cue = rowsByKind('cue')[0];
+    const a = s().addBlock(cue.id, 2, 4);
+    clearHistory();
+    s().setSelection([a]);
+    s().duplicateSelection();
+    expect(s().core.blocks).toHaveLength(2);
+    undo();
+    expect(s().core.blocks).toHaveLength(1);
+    redo();
+    expect(s().core.blocks).toHaveLength(2);
+  });
+});
+
 describe('cue curves', () => {
   it('setCueMode seeds an ascending curve and preserves the label', () => {
     const cue = rowsByKind('cue')[0];

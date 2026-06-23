@@ -14,6 +14,7 @@
 import { getProjectTokens, isVerified } from './session';
 import { saveCurrentToCloud } from '../persistence/cloudSync';
 import { refreshCollab } from '../hooks/useCollab';
+import { emitCloudChanged } from './cloudSignal';
 import { useStore } from '../store/store';
 
 function appBase(): string {
@@ -84,10 +85,13 @@ export async function ensureShareableUrl(projectId: string): Promise<void> {
   useStore.getState().setCloudSave('saving');
   try {
     await saveCurrentToCloud();
-    useStore.getState().setCloudSave('saved', Date.now());
-    refreshCollab(); // publishing grants edit access without changing the id — rejoin live
-  } catch {
-    useStore.getState().setCloudSave('error');
+    useStore.getState().setCloudSave('saved', { at: Date.now() });
+    // Publishing grants edit access without changing the id, so views memoised on [projectId]
+    // wouldn't otherwise recompute: rejoin live and tell the TopBar to surface Share/Sync.
+    refreshCollab();
+    emitCloudChanged();
+  } catch (err) {
+    useStore.getState().setCloudSave('error', { error: (err as Error)?.message ?? String(err) });
     // Stay local; the address bar simply isn't a remote link yet (e.g. offline). The next
     // project switch / reflect retries.
   } finally {

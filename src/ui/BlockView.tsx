@@ -5,7 +5,6 @@ import { useStore, beginHistoryGroup, endHistoryGroup } from '../store/store';
 import {
   snapTimeWith,
   snapMoveStart,
-  cueEdgeTimes,
   type SnapContext,
   type SnapResult,
 } from '../core/snap';
@@ -38,8 +37,10 @@ interface DragState {
   origStart: number;
   origEnd: number;
   grouped: boolean;
-  /** Edge times of every OTHER cue, captured at gesture start, for cue-magnet snapping. */
+  /** Edge times of every cue NOT being dragged, captured at gesture start, for cue-magnet snapping. */
   cueTimes: number[];
+  /** Blocks moved by this gesture (just the grabbed one, unless it's a multi-selection move). */
+  members: { id: string; origStart: number; origEnd: number }[];
 }
 
 export function BlockView({ block, color, selected, onEditHeight }: BlockViewProps): JSX.Element {
@@ -49,6 +50,7 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
 
   const selectBlock = useStore((s) => s.selectBlock);
   const moveBlock = useStore((s) => s.moveBlock);
+  const moveBlocks = useStore((s) => s.moveBlocks);
   const resizeBlock = useStore((s) => s.resizeBlock);
   const setBlockLabel = useStore((s) => s.setBlockLabel);
   const addCurvePoint = useStore((s) => s.addCurvePoint);
@@ -109,7 +111,9 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
       if (!d) return;
       if (!d.grouped && Math.abs(e.clientX - d.startClientX) <= 2) return;
       if (!d.grouped) {
-        beginHistoryGroup(d.kind === 'move' ? 'Move block' : 'Resize block');
+        const label =
+          d.kind === 'move' ? (d.members.length > 1 ? 'Move blocks' : 'Move block') : 'Resize block';
+        beginHistoryGroup(label);
         d.grouped = true;
       }
       const { view, grid, snap } = liveRef.current;
@@ -119,13 +123,19 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
       const ctx: SnapContext = { grid, snap, pixelsPerSecond: pps, cueTimes: d.cueTimes };
       let r: SnapResult;
       if (d.kind === 'move') {
-        // Horizontal move + optional vertical move to whichever cue/section lane the
-        // pointer is over (drag a cue between tracks). Either edge can magnet to a cue.
+        // Snap is computed from the grabbed (primary) cue; either of its edges can magnet.
         const rawStart = d.origStart + dxSec;
         r = e.altKey
           ? { value: rawStart, guide: null }
           : snapMoveStart(rawStart, d.origEnd - d.origStart, ctx);
-        moveBlock(d.id, r.value, rowIdUnderPointer(e.clientX, e.clientY));
+        if (d.members.length > 1) {
+          // Group move: shift every selected cue by the same snapped delta; rows unchanged.
+          const delta = r.value - d.origStart;
+          moveBlocks(d.members.map((m) => ({ id: m.id, start: m.origStart + delta })));
+        } else {
+          // Single cue: also allow a vertical move to whichever cue/section lane is under the pointer.
+          moveBlock(d.id, r.value, rowIdUnderPointer(e.clientX, e.clientY));
+        }
       } else if (d.kind === 'start') {
         const raw = d.origStart + dxSec;
         r = e.altKey ? { value: raw, guide: null } : snapTimeWith(raw, ctx);
@@ -158,6 +168,15 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
     const el = e.currentTarget as Element;
     el.setPointerCapture(e.pointerId);
     captureElRef.current = el;
+    const allBlocks = useStore.getState().core.blocks;
+    const sel = useStore.getState().selection;
+    // A 'move' on a block that's part of a multi-selection drags the whole group; everything
+    // else (resize, or moving a non-multi block) acts on just this cue.
+    const groupIds =
+      kind === 'move' && sel.length > 1 && sel.includes(block.id) ? new Set(sel) : new Set([block.id]);
+    const members = allBlocks
+      .filter((b) => groupIds.has(b.id))
+      .map((b) => ({ id: b.id, origStart: b.start, origEnd: b.end }));
     drag.current = {
       kind,
       id: block.id,
@@ -165,8 +184,11 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
       origStart: block.start,
       origEnd: block.end,
       grouped: false,
-      // Snap targets = every other cue's edges, captured once at gesture start.
-      cueTimes: cueEdgeTimes(useStore.getState().core.blocks, block.id),
+      members,
+      // Snap targets = edges of every cue NOT being dragged (point cues contribute one edge).
+      cueTimes: allBlocks
+        .filter((b) => !groupIds.has(b.id))
+        .flatMap((b) => (b.isPoint || b.end === b.start ? [b.start] : [b.start, b.end])),
     };
     window.addEventListener('pointermove', handlersRef.current.move);
     window.addEventListener('pointerup', handlersRef.current.up);
@@ -175,7 +197,12 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
 
   const onBodyPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || editing) return;
-    selectBlock(block.id, e.shiftKey);
+    const sel = useStore.getState().selection;
+    // Shift toggles this cue in/out of the selection. A plain click on an unselected cue
+    // selects just it; a plain click on an already-selected cue keeps the (group) selection
+    // so the following drag can move them together.
+    if (e.shiftKey) selectBlock(block.id, true);
+    else if (!sel.includes(block.id)) selectBlock(block.id, false);
     beginDrag('move', e);
   };
 
@@ -260,6 +287,7 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
         <div
           ref={rootRef}
           className={`point-cue${selected ? ' selected' : ''}${editing ? ' editing' : ''}`}
+          data-block-id={block.id}
           style={{ left }}
           onPointerDown={onBodyPointerDown}
           onClick={onBodyClick}
@@ -299,6 +327,7 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
       <div
         ref={rootRef}
         className={`block-view${selected ? ' selected' : ''}${editing ? ' editing' : ''}${isCurve ? ' curve' : ''}`}
+        data-block-id={block.id}
         style={{
           left,
           width,

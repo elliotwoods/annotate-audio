@@ -54,8 +54,8 @@ export function ShareDialog({
 
         {!tokens.view && !tokens.edit ? (
           <p className="muted">
-            This set isn’t in the cloud yet. Use <strong>Save to cloud</strong> first, then come
-            back to get shareable links.
+            This set isn’t in the cloud yet. Add audio or a cue and it saves to the cloud
+            automatically — your shareable links will appear here.
           </p>
         ) : (
           <>

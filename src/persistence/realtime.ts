@@ -5,10 +5,11 @@
 // key is configured server-side the channel simply never opens and collaboration degrades
 // to a no-op (the app stays fully usable, just not live).
 //
-// One channel carries three logical topics in a single envelope (`RealtimeMessage`):
+// One channel carries several logical topics in a single envelope (`RealtimeMessage`):
 //   • 'doc'      — full-document broadcast for last-write-wins sync
 //   • 'playback' — opt-in transport (play/pause/seek) sync
 //   • 'presence' — join/leave + the join-time state handshake
+//   • 'sync'     — "enable sync playback" push: turning it on flips peers on (off never propagates)
 //
 // Echo prevention: every message carries `origin` (a stable per-tab id); receivers drop
 // messages whose origin === their own ORIGIN. Ably is also configured with echoMessages:false
@@ -16,7 +17,7 @@
 
 import { getAdminKey } from '../auth/session';
 
-export type RealtimeTopic = 'doc' | 'playback' | 'presence';
+export type RealtimeTopic = 'doc' | 'playback' | 'presence' | 'sync';
 export type RealtimeStatus = 'connecting' | 'open' | 'closed' | 'error';
 
 export interface RealtimeMessage<T = unknown> {

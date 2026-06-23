@@ -106,25 +106,29 @@ export function StartDialog({ open, onClose }: { open: boolean; onClose: () => v
           </button>
         </div>
 
-        <div className="dialog-actions">
-          <button
-            className="primary"
-            onClick={() => {
-              startNewProject();
-              onClose();
-            }}
-          >
-            New project
-          </button>
-          <button onClick={() => importRef.current?.click()}>Import JSON…</button>
-          <input
-            ref={importRef}
-            type="file"
-            accept=".json,application/json"
-            hidden
-            onChange={(e) => void onImport(e.target.files?.[0])}
-          />
-        </div>
+        {/* Creating or importing a set requires sign-in — a share-link guest can only reopen
+            the set they were given. */}
+        {isVerified() && (
+          <div className="dialog-actions">
+            <button
+              className="primary"
+              onClick={() => {
+                startNewProject();
+                onClose();
+              }}
+            >
+              New project
+            </button>
+            <button onClick={() => importRef.current?.click()}>Import JSON…</button>
+            <input
+              ref={importRef}
+              type="file"
+              accept=".json,application/json"
+              hidden
+              onChange={(e) => void onImport(e.target.files?.[0])}
+            />
+          </div>
+        )}
 
         {notice && <div className="dialog-notice">{notice}</div>}
         {relinkFor && (

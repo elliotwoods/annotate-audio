@@ -102,16 +102,14 @@
   stroke-linecap: round;
 }
 
-/* live drag-create preview rectangle */
-.lanes__preview {
+/* Rubber-band (marquee) selection box, drawn across all rows during a lane drag. */
+.lanes__marquee {
   position: absolute;
-  top: 5px;
-  height: calc(var(--row-h) - 12px);
-  border: 1px dashed;
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.06);
+  z-index: 9;
   pointer-events: none;
-  z-index: 6;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
 }
 
 /* Roll handle at a touching cue boundary (one cue ends, the next begins) when neither is

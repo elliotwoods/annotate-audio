@@ -49,8 +49,12 @@ export function startCloudAutosave(): () => void {
       .catch(() => undefined) // never let a prior failure break the chain
       .then(() => saveCurrentToCloud())
       .then(
-        () => useStore.getState().setCloudSave('saved', Date.now()),
-        () => useStore.getState().setCloudSave('error'), // surfaced by the save indicator
+        () => useStore.getState().setCloudSave('saved', { at: Date.now() }),
+        // Capture the reason so the save indicator can surface it on click.
+        (err) =>
+          useStore
+            .getState()
+            .setCloudSave('error', { error: (err as Error)?.message ?? String(err) }),
       );
     return saving;
   };

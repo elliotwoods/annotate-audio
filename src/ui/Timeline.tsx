@@ -16,6 +16,7 @@ import { SnapGuide } from './SnapGuide';
 import { useStore } from '../store/store';
 import { useView, useAudio, useContentDuration } from '../store/selectors';
 import { xToTime, clampScroll } from '../core/transform';
+import { contentDuration } from '../core/contentExtent';
 import { transport } from '../audio/transport';
 import { RULER_H, TIME_RULER_H, WAVEFORM_H } from './metrics';
 
@@ -315,9 +316,7 @@ function ColumnResizer({
 
 function contentDurationFromState(): number {
   const s = useStore.getState();
-  if (s.core.audio) return s.core.audio.duration;
-  const maxEnd = s.core.blocks.reduce((m, b) => Math.max(m, b.end), 0);
-  return maxEnd > 0 ? maxEnd : 60;
+  return contentDuration(s.core.audio, s.core.blocks);
 }
 
 // ── wheel helpers ───────────────────────────────────────────────────────────────

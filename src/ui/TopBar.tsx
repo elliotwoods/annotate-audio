@@ -27,6 +27,7 @@ import { loadAudioFile, loadProjectWithAudio, relinkAudioFile } from '../audio/a
 import { AudioDecodeError } from '../audio/AudioEngine';
 import { exportProjectToFile, importProjectFromFile } from '../persistence/json';
 import { isVerified, getProjectTokens } from '../auth/session';
+import { emitCloudChanged, onCloudChanged } from '../auth/cloudSignal';
 import { refreshCollab, type CollabState } from '../hooks/useCollab';
 import { useSoundToggle } from '../hooks/useSoundToggle';
 import { BpmControls } from './BpmControls';
@@ -110,6 +111,11 @@ export function TopBar({
     return { verified, isCloud, editable, viewOnly: isCloud && !editable };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, cloudTick]);
+
+  // Auto-publishing a set (or signing in/out) changes cloud access without changing the project
+  // id, so recompute the `cloud` memo whenever the shared signal fires — this is what makes the
+  // Share button appear the moment a fresh set reaches the cloud.
+  useEffect(() => onCloudChanged(() => setCloudTick((t) => t + 1)), []);
 
   const handleExport = useCallback(() => {
     setError(null);
@@ -444,7 +450,9 @@ export function TopBar({
         open={loginOpen}
         onClose={() => setLoginOpen(false)}
         onChange={() => {
-          setCloudTick((t) => t + 1);
+          // Signing in/out changes cloud access app-wide: refresh live collab, recompute this
+          // bar's access memo (via the subscription above), and let App re-gate the editor.
+          emitCloudChanged();
           refreshCollab();
         }}
       />

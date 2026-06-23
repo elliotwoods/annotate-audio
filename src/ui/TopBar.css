@@ -108,6 +108,17 @@
 .topbar-savestate.is-error {
   color: var(--danger);
 }
+/* The error chip is a button (click for details) — strip native button chrome and hint it. */
+button.topbar-savestate {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+button.topbar-savestate.is-error:hover {
+  text-decoration: underline;
+}
 .topbar-savestate svg {
   flex: 0 0 auto;
 }

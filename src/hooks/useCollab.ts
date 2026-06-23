@@ -4,7 +4,11 @@
 // realtime channel and:
 //   • broadcasts local `core` edits (debounced, whole-document) and applies inbound ones
 //     under last-write-wins, without echoing or polluting the local undo history;
-//   • optionally syncs transport (play/pause/seek/stop) when BOTH ends enable "sync playback";
+//   • optionally syncs transport (play/pause/seek/stop) for ends that enable "sync playback".
+//     Enabling it is a PUSH: turning sync on broadcasts a 'sync' message that flips every
+//     connected peer on too, so one person can pull the room into a shared transport. Turning
+//     it OFF is purely local — it never propagates, so a peer can drop out without dragging
+//     the others off (and the enabler keeps driving anyone still synced).
 //   • tracks lightweight presence for a "live · N" indicator.
 //
 // All view/playback/selection state stays local per user — only `core` is synchronised.
@@ -59,6 +63,10 @@ interface PresencePayload {
   canEdit: boolean;
   updatedAt: number;
 }
+interface SyncPayload {
+  /** Only ever `true` — turning sync ON is the one transition that propagates. */
+  on: boolean;
+}
 
 // ── external "cloud status changed" signal ─────────────────────────────────────
 // Saving a new project to the cloud (or signing in) grants access without changing the
@@ -77,6 +85,14 @@ function readSyncPref(): boolean {
   }
 }
 
+function writeSyncPref(on: boolean): void {
+  try {
+    localStorage.setItem(SYNC_PLAYBACK_KEY, on ? '1' : '0');
+  } catch {
+    /* storage unavailable — preference simply won't persist */
+  }
+}
+
 export function useCollab(projectId: string): CollabState {
   const [status, setStatus] = useState<RealtimeStatus>('closed');
   const [peerCount, setPeerCount] = useState(0);
@@ -88,13 +104,15 @@ export function useCollab(projectId: string): CollabState {
   const syncRef = useRef(syncPlayback);
   syncRef.current = syncPlayback;
 
+  // The live channel, so the (effect-external) toggle can broadcast a sync-on push.
+  const channelRef = useRef<RealtimeChannel | null>(null);
+
   const setSyncPlayback = useCallback((on: boolean) => {
     setSyncPlaybackState(on);
-    try {
-      localStorage.setItem(SYNC_PLAYBACK_KEY, on ? '1' : '0');
-    } catch {
-      /* storage unavailable — preference simply won't persist */
-    }
+    writeSyncPref(on);
+    // Turning sync ON pushes every connected peer to enable it too; turning OFF is local-only
+    // (a silent opt-out) so a peer can drop out without dragging the others off with them.
+    if (on) channelRef.current?.publish('sync', { on: true } satisfies SyncPayload);
   }, []);
 
   // Re-run the join effect when cloud access changes (post-save / post-login).
@@ -123,6 +141,7 @@ export function useCollab(projectId: string): CollabState {
       token: tokenFor(projectId),
       canEdit: canEdit(projectId),
     });
+    channelRef.current = channel;
 
     // ── presence ────────────────────────────────────────────────────────────
     const peers = new Map<string, number>(); // origin → lastSeen ms
@@ -209,6 +228,16 @@ export function useCollab(projectId: string): CollabState {
         case 'playback':
           applyRemotePlayback(msg.payload as PlaybackPayload, msg.ts);
           break;
+        case 'sync': {
+          // A peer turned sync on → follow them on. We update state/persist directly rather
+          // than via setSyncPlayback so we DON'T re-broadcast (avoids an enable storm), and we
+          // never auto-off, so a local opt-out stays opted out until someone enables again.
+          if ((msg.payload as SyncPayload)?.on) {
+            setSyncPlaybackState(true);
+            writeSyncPref(true);
+          }
+          break;
+        }
         case 'presence': {
           const p = msg.payload as PresencePayload;
           if (p.kind === 'bye') peers.delete(msg.origin);
@@ -251,6 +280,7 @@ export function useCollab(projectId: string): CollabState {
       unsubChannel();
       unsubStatus();
       channel.close();
+      if (channelRef.current === channel) channelRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, refreshTick]);

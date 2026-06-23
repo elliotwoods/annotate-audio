@@ -7,7 +7,13 @@
 
 import type { Project } from '../model/types';
 import { validateProject } from './json';
-import { getAdminKey, getProjectTokens, rememberTokens, tokenFor } from '../auth/session';
+import {
+  getAdminKey,
+  getProjectTokens,
+  rememberTokens,
+  tokenFor,
+  type ProjectTokens,
+} from '../auth/session';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '';
 
@@ -136,6 +142,27 @@ export async function loadCloudProject(
   return { meta: data.meta, snapshot: data.snapshot, project: validateProject(data.project) };
 }
 
+/**
+ * Recover an existing cloud set's tokens for a verified owner who lacks them locally
+ * (e.g. opened the set from the offline library, or cleared storage). The GET endpoint
+ * echoes view/edit tokens back to admin/edit callers; persist them. Best-effort — returns
+ * whatever tokens we now hold for the project.
+ */
+export async function recoverProjectTokens(id: string): Promise<ProjectTokens> {
+  try {
+    const data = await apiJSON<{ meta: CloudMeta }>(
+      withToken(`/api/projects/${encodeURIComponent(id)}`, id),
+      { headers: adminHeaders() },
+    );
+    if (data.meta.viewToken || data.meta.editToken) {
+      rememberTokens(id, { view: data.meta.viewToken, edit: data.meta.editToken });
+    }
+  } catch {
+    /* leave tokens as-is; the next open retries */
+  }
+  return getProjectTokens(id);
+}
+
 export function listSnapshots(id: string): Promise<{ snapshots: SnapshotInfo[]; latest: string | null }> {
   return apiJSON(withToken(`/api/projects/${encodeURIComponent(id)}/snapshots`, id), {
     headers: adminHeaders(),
@@ -171,11 +198,24 @@ export async function ensureAudioUploaded(
     },
   );
   if (res.exists || !res.url) return;
-  const put = await fetch(res.url, {
-    method: 'PUT',
-    headers: { 'Content-Type': blob.type || 'application/octet-stream' },
-    body: blob,
-  });
+  let put: Response;
+  try {
+    put = await fetch(res.url, {
+      method: 'PUT',
+      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+      body: blob,
+    });
+  } catch (err) {
+    // A rejected fetch (vs. a non-2xx response) to the R2 host is almost always the browser
+    // blocking a cross-origin request because the bucket has no CORS rule for this site's
+    // origin — run `node scripts/set-r2-cors.mjs` to add one.
+    throw new CloudError(
+      `Could not reach audio storage to upload the track. This usually means the R2 bucket is ` +
+        `missing a CORS rule for ${window.location.origin} (browser blocked the upload). ` +
+        `Underlying error: ${(err as Error).message}`,
+      0,
+    );
+  }
   if (!put.ok) throw new CloudError(`Audio upload failed (${put.status}).`, put.status);
 }
 
@@ -189,7 +229,19 @@ export async function fetchAudioBlob(projectId: string, hash: string): Promise<B
     const { url } = await apiJSON<{ url: string }>(withToken(path, projectId), {
       headers: adminHeaders(),
     });
-    const res = await fetch(url);
+    let res: Response;
+    try {
+      res = await fetch(url);
+    } catch (err) {
+      // Same cross-origin story as the upload path: a rejected fetch to the R2 host means the
+      // bucket is missing a CORS rule for this site's origin.
+      throw new CloudError(
+        `Could not reach audio storage to download the track. This usually means the R2 bucket ` +
+          `is missing a CORS rule for ${window.location.origin}. ` +
+          `Underlying error: ${(err as Error).message}`,
+        0,
+      );
+    }
     if (!res.ok) return null;
     return await res.blob();
   } catch (err) {

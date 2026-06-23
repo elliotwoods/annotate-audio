@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { useStore, undo, redo } from '../store/store';
 import { transport } from '../audio/transport';
 import { exportProjectToFile } from '../persistence/json';
+import { getPointerTime } from '../ui/pointerTime';
 
 function isTypingTarget(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
@@ -34,6 +35,32 @@ export function useKeyboard() {
       if (mod && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         exportProjectToFile(s.exportProject());
+        return;
+      }
+      if (mod && (e.key === 'c' || e.key === 'C')) {
+        e.preventDefault();
+        s.copySelection();
+        return;
+      }
+      if (mod && (e.key === 'x' || e.key === 'X')) {
+        e.preventDefault();
+        s.cutSelection();
+        return;
+      }
+      if (mod && (e.key === 'v' || e.key === 'V')) {
+        e.preventDefault();
+        // Paste under the cursor (snapped) when the pointer is over the timeline, else at the playhead.
+        s.paste(getPointerTime() ?? undefined);
+        return;
+      }
+      if (mod && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault();
+        s.duplicateSelection();
+        return;
+      }
+      if (mod && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        s.setSelection(s.core.blocks.map((b) => b.id));
         return;
       }
       if (mod) return; // leave other browser shortcuts alone

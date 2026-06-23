@@ -34,6 +34,7 @@ import {
 import { isVerified, getProjectTokens } from '../auth/session';
 import { refreshCollab } from '../hooks/useCollab';
 import { reflectShareUrl } from '../auth/shareUrl';
+import { emitCloudChanged } from '../auth/cloudSignal';
 import type { Project } from '../model/types';
 import './ProjectMenu.css';
 
@@ -196,15 +197,16 @@ export function ProjectMenu({
     useStore.getState().setCloudSave('saving');
     try {
       const r = await saveCurrentToCloud();
-      useStore.getState().setCloudSave('saved', Date.now());
+      useStore.getState().setCloudSave('saved', { at: Date.now() });
       refreshCollab();
+      emitCloudChanged();
       reflectShareUrl(projectId);
       setTick((t) => t + 1);
       onCloudChanged?.();
       await refresh();
       setNotice(r.created ? 'Published — your page URL is now a live edit link.' : 'Snapshot saved.');
     } catch (err) {
-      useStore.getState().setCloudSave('error');
+      useStore.getState().setCloudSave('error', { error: errorMessage(err) });
       setNotice(`Cloud save failed: ${errorMessage(err)}`);
     } finally {
       setBusy(false);
@@ -254,11 +256,14 @@ export function ProjectMenu({
 
               <div className="projectmenu-divider" />
 
-              {/* File actions */}
+              {/* File actions. New/Import create or replace the current set, so they're for
+                  signed-in users only — a share-link guest can only view/edit the shared set. */}
               <div className="projectmenu-actions">
-                <button type="button" className="ghost" onClick={doNew}>
-                  <FilePlus size={15} aria-hidden /> New
-                </button>
+                {cloud.verified && (
+                  <button type="button" className="ghost" onClick={doNew}>
+                    <FilePlus size={15} aria-hidden /> New
+                  </button>
+                )}
                 <button
                   type="button"
                   className="ghost"
@@ -269,16 +274,18 @@ export function ProjectMenu({
                 >
                   <FolderOpen size={15} aria-hidden /> Open library…
                 </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => {
-                    onImport();
-                    close();
-                  }}
-                >
-                  <Upload size={15} aria-hidden /> Import
-                </button>
+                {cloud.verified && (
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      onImport();
+                      close();
+                    }}
+                  >
+                    <Upload size={15} aria-hidden /> Import
+                  </button>
+                )}
                 <button
                   type="button"
                   className="ghost"
@@ -293,7 +300,8 @@ export function ProjectMenu({
 
               <div className="projectmenu-divider" />
 
-              {/* Cloud */}
+              {/* Cloud. Saving is automatic — there is no "Save to cloud" button; the only
+                  manual control is an explicit snapshot checkpoint. */}
               <div className="projectmenu-cloud">
                 {cloud.editable && cloud.isCloud && (
                   <>
@@ -306,18 +314,13 @@ export function ProjectMenu({
                   </>
                 )}
                 {cloud.editable && !cloud.isCloud && (
-                  <button type="button" className="primary" onClick={() => void saveCloud()} disabled={busy}>
-                    <UploadCloud size={15} aria-hidden /> {busy ? 'Saving…' : 'Save to cloud'}
-                  </button>
+                  <span className="projectmenu-cloud-status muted">
+                    <Cloud size={14} aria-hidden /> Saves to the cloud automatically once it has content
+                  </span>
                 )}
                 {cloud.viewOnly && (
                   <span className="projectmenu-cloud-status muted">
                     <Cloud size={14} aria-hidden /> View-only — sign in to edit
-                  </span>
-                )}
-                {!cloud.isCloud && !cloud.verified && (
-                  <span className="projectmenu-cloud-status muted">
-                    <Cloud size={14} aria-hidden /> Sign in to save to the cloud
                   </span>
                 )}
               </div>
