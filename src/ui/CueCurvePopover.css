@@ -1,0 +1,60 @@
+/* Editing panel under a selected cue (portalled, non-modal). See CueCurvePopover.tsx. */
+.cue-curve-popover {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.cue-curve-popover__row {
+  display: flex;
+  gap: 4px;
+}
+.cue-curve-popover__row button {
+  flex: 1;
+  justify-content: center;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+/* The Text/Curve mode toggle reads as a single segmented control. */
+.cue-curve-popover__mode button {
+  font-weight: 600;
+}
+
+.cue-curve-popover__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2, var(--text-1));
+  margin-top: 2px;
+}
+
+/* Position / duration readout: a label column + two value columns (clock, bars). */
+.cue-curve-popover__meta {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  gap: 3px 12px;
+  align-items: baseline;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.cue-curve-popover__meta-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2, var(--text-1));
+}
+.cue-curve-popover__meta-val {
+  font-size: 12px;
+  text-align: right;
+  color: var(--text-0);
+  font-variant-numeric: tabular-nums;
+}

@@ -4,7 +4,7 @@
 // nesting/scroll; the commit goes through the cycle-safe store primitive `setParent`.
 
 import { useCallback, useRef, useState, type RefObject } from 'react';
-import { useStore } from '../store/store';
+import { useStore, beginHistoryGroup, endHistoryGroup } from '../store/store';
 import { subtreeIds } from '../core/rowtree';
 
 export interface DropIndicator {
@@ -117,8 +117,22 @@ export function useRowDnD(lanesRef: RefObject<HTMLDivElement | null>) {
       const tgt = target.current;
       cleanup();
       if (!d || !tgt) return;
-      if (tgt.kind === 'into') useStore.getState().setParent(d.id, tgt.groupId);
-      else useStore.getState().setParent(d.id, tgt.parentId, tgt.index);
+      if (tgt.kind === 'into') {
+        // Read the target's collapsed state BEFORE the move (setParent doesn't touch it).
+        const targetGroup = useStore.getState().core.rows.find((r) => r.id === tgt.groupId);
+        // Reveal the result: a drop into a collapsed group would otherwise hide the row,
+        // making the nest look like it didn't happen — so expand it. Wrap both mutations in
+        // one undo group so the whole drop is a single undo step.
+        const expand = targetGroup?.kind === 'group' && !!targetGroup.collapsed;
+        if (expand) beginHistoryGroup('Nest row');
+        useStore.getState().setParent(d.id, tgt.groupId);
+        if (expand) {
+          useStore.getState().toggleCollapse(tgt.groupId);
+          endHistoryGroup();
+        }
+      } else {
+        useStore.getState().setParent(d.id, tgt.parentId, tgt.index);
+      }
     },
     cancel() {
       cleanup();

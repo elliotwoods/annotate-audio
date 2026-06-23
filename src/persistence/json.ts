@@ -9,14 +9,23 @@ import type {
   AudioMeta,
   BeatGrid,
   Block,
+  CueMode,
+  CurveData,
+  CurvePoint,
+  CurveType,
+  GridSnap,
   Project,
   Row,
   RowKind,
+  SegmentShape,
   SnapResolution,
+  SnapSettings,
   ViewState,
 } from '../model/types';
 import { SCHEMA_VERSION } from '../model/types';
+import { DEFAULT_SNAP } from '../model/defaults';
 import { normalizeTree } from '../core/rowtree';
+import { clamp01, defaultPointsFor, normalizePoints } from '../core/curve';
 
 const FILE_EXTENSION = '.cuetl.json';
 
@@ -130,12 +139,31 @@ function validateRows(value: unknown): Row[] {
   return normalizeTree(rows);
 }
 
+const CUE_MODES: readonly CueMode[] = ['text', 'curve'];
+const CURVE_TYPES: readonly CurveType[] = ['ascending', 'descending', 'peak', 'trapezium', 'arbitrary'];
+const SEGMENT_SHAPES: readonly SegmentShape[] = ['linear', 'exp', 'log', 'scurve', 'step'];
+
+/** Validate/repair a curve into a always-valid CurveData (>= 2 ordered, endpoint-pinned points). */
+function validateCurve(value: unknown): CurveData | undefined {
+  if (!isRecord(value)) return undefined;
+  const type = CURVE_TYPES.includes(value.type as CurveType) ? (value.type as CurveType) : 'ascending';
+  const raw = Array.isArray(value.points) ? value.points : [];
+  let points: CurvePoint[] = raw.filter(isRecord).map((p) => ({
+    t: clamp01(typeof p.t === 'number' ? p.t : 0),
+    v: clamp01(typeof p.v === 'number' ? p.v : 0),
+    shape: SEGMENT_SHAPES.includes(p.shape as SegmentShape) ? (p.shape as SegmentShape) : 'linear',
+  }));
+  if (points.length < 2) points = defaultPointsFor(type); // repair: never fewer than two
+  return { type, points: normalizePoints(points) };
+}
+
 function validateBlock(value: unknown, index: number): Block {
   if (!isRecord(value)) throw new Error(`Invalid project: blocks[${index}] must be an object.`);
   const start = requireFiniteNumber(value.start, `blocks[${index}].start`);
   const end = requireFiniteNumber(value.end, `blocks[${index}].end`);
   const isPoint = typeof value.isPoint === 'boolean' ? value.isPoint : end <= start;
-  return {
+  const curve = validateCurve(value.curve);
+  const block: Block = {
     id: requireString(value, 'id'),
     rowId: requireString(value, 'rowId'),
     start,
@@ -143,6 +171,10 @@ function validateBlock(value: unknown, index: number): Block {
     isPoint,
     label: typeof value.label === 'string' ? value.label : '',
   };
+  // Only attach mode/curve when present, so legacy/text cues stay clean.
+  if (CUE_MODES.includes(value.mode as CueMode)) block.mode = value.mode as CueMode;
+  if (curve) block.curve = curve;
+  return block;
 }
 
 function validateBlocks(value: unknown): Block[] {
@@ -150,18 +182,50 @@ function validateBlocks(value: unknown): Block[] {
   return value.map((b, i) => validateBlock(b, i));
 }
 
-const SNAP_RESOLUTIONS: readonly SnapResolution[] = ['bar', 'half', 'quarter', 'eighth', 'off'];
+const LEGACY_SNAP_RESOLUTIONS: readonly SnapResolution[] = ['bar', 'half', 'quarter', 'eighth', 'off'];
+const GRID_SNAPS: readonly GridSnap[] = ['bar', 'half', 'quarter', 'eighth'];
+
+/** Resolve the single grid division from an object's `grid` field (or older boolean flags). */
+function pickGrid(raw: Record<string, unknown>): GridSnap | null {
+  if (typeof raw.grid === 'string' && GRID_SNAPS.includes(raw.grid as GridSnap)) {
+    return raw.grid as GridSnap;
+  }
+  if (raw.grid === null) return null;
+  // Tolerate the short-lived boolean-per-division object shape (finest wins).
+  if (raw.eighth) return 'eighth';
+  if (raw.quarter) return 'quarter';
+  if (raw.half) return 'half';
+  if (raw.bar) return 'bar';
+  return null;
+}
+
+/**
+ * Normalize `view.snap` into {@link SnapSettings}, accepting the current object form or a
+ * legacy single `SnapResolution` string (pre-toggles projects). A legacy 'off' becomes the
+ * master toggle off (remembering 'bar'); any other legacy value enables snapping, that grid
+ * division, and cue snapping. Missing/garbage → defaults.
+ */
+function normalizeSnap(raw: unknown): SnapSettings {
+  if (typeof raw === 'string' && LEGACY_SNAP_RESOLUTIONS.includes(raw as SnapResolution)) {
+    const enabled = raw !== 'off';
+    return { enabled, cues: enabled, grid: raw === 'off' ? 'bar' : (raw as GridSnap) };
+  }
+  if (isRecord(raw)) {
+    return {
+      enabled: raw.enabled !== false, // default to on when omitted
+      cues: Boolean(raw.cues),
+      grid: pickGrid(raw),
+    };
+  }
+  return { ...DEFAULT_SNAP };
+}
 
 function validateView(value: unknown): ViewState {
   if (!isRecord(value)) throw new Error('Invalid project: "view" must be an object.');
-  const snap = value.snap;
-  if (typeof snap !== 'string' || !SNAP_RESOLUTIONS.includes(snap as SnapResolution)) {
-    throw new Error("Invalid project: view.snap must be 'bar' | 'half' | 'quarter' | 'eighth' | 'off'.");
-  }
   return {
     pixelsPerSecond: requireFiniteNumber(value.pixelsPerSecond, 'view.pixelsPerSecond'),
     scrollSec: requireFiniteNumber(value.scrollSec, 'view.scrollSec'),
-    snap: snap as SnapResolution,
+    snap: normalizeSnap(value.snap),
     followPlayhead: Boolean(value.followPlayhead),
   };
 }

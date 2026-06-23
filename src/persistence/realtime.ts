@@ -57,7 +57,7 @@ export const ORIGIN: string =
     ? crypto.randomUUID()
     : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? '';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '';
 // Single Ably event name; the real topic rides inside the envelope so all three logical
 // topics share one subscription.
 const EVENT = 'm';
@@ -215,12 +215,13 @@ let provider: RealtimeProvider | null = null;
 
 /**
  * The single active realtime provider. Swap this one function to change backends.
- * Defaults to Ably; if the build explicitly disables realtime (VITE_REALTIME=off) a no-op
- * provider is used so the app never attempts to connect.
+ * Defaults to Ably; if the build explicitly disables realtime (NEXT_PUBLIC_REALTIME=off) a
+ * no-op provider is used so the app never attempts to connect.
  */
 export function getRealtimeProvider(): RealtimeProvider {
   if (!provider) {
-    provider = import.meta.env.VITE_REALTIME === 'off' ? new NoopProvider() : new AblyProvider();
+    provider =
+      process.env.NEXT_PUBLIC_REALTIME === 'off' ? new NoopProvider() : new AblyProvider();
   }
   return provider;
 }

@@ -1,8 +1,9 @@
 // Timeline coordinator (spec §3 "single source of time", §14 layout). Lays out the
 // ruler/waveform/lanes strips, measures the lane width (→ store.laneWidth so every
-// layer shares it), and owns viewport interactions: wheel zoom / horizontal scroll,
-// free click-scrub on ruler+waveform, and a horizontal scrollbar. The playhead is a
-// cheap overlay updated outside React (see Playhead).
+// layer shares it), and owns viewport interactions: device-aware wheel zoom/pan/scroll
+// (mouse wheel = cursor-focal time zoom; trackpad = pan time / scroll rows / pinch
+// zoom), free click-scrub on ruler+waveform, and a horizontal scrollbar. The playhead
+// is a cheap overlay updated outside React (see Playhead).
 
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import './Timeline.css';
@@ -11,6 +12,7 @@ import { TimeRulerCanvas } from './TimeRulerCanvas';
 import { WaveformCanvas } from './WaveformCanvas';
 import { Lanes } from './Lanes';
 import { Playhead } from './Playhead';
+import { SnapGuide } from './SnapGuide';
 import { useStore } from '../store/store';
 import { useView, useAudio, useContentDuration } from '../store/selectors';
 import { xToTime, clampScroll } from '../core/transform';
@@ -20,6 +22,7 @@ import { RULER_H, TIME_RULER_H, WAVEFORM_H } from './metrics';
 export function Timeline() {
   const view = useView();
   const audio = useAudio();
+  const audioLoading = useStore((s) => s.audioLoading);
   const laneWidth = useStore((s) => s.laneWidth);
   const gutterWidth = useStore((s) => s.gutterWidth);
   const prepWidth = useStore((s) => s.prepWidth);
@@ -40,7 +43,10 @@ export function Timeline() {
     return () => ro.disconnect();
   }, []);
 
-  // ── wheel: ctrl/meta = zoom (focal at cursor); else horizontal scroll ───────
+  // ── wheel: device-aware zoom / pan / row-scroll (Google-Maps-style) ─────────
+  // Mouse wheel = zoom time around the cursor (but scroll the cue list when hovering
+  // a list that overflows). Trackpad: horizontal swipe = pan time, vertical swipe =
+  // scroll the cue list, pinch / Ctrl+swipe = zoom time. See helpers below.
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -48,17 +54,23 @@ export function Timeline() {
       const s = useStore.getState();
       const v = s.view;
       const rect = laneMeasureRef.current?.getBoundingClientRect();
+      const focalX = rect
+        ? Math.max(0, Math.min(s.laneWidth, e.clientX - rect.left))
+        : s.laneWidth / 2;
+      const { dx, dy } = normalizeWheel(e);
+
+      // 1. Pinch / Ctrl+swipe / Ctrl|Meta+wheel → zoom time around the cursor.
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        const focalX = rect ? e.clientX - rect.left : s.laneWidth / 2;
-        s.zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15, focalX);
+        s.zoomBy(zoomFactor(dy), focalX);
         return;
       }
-      const overLanes = !!lanesScrollRef.current && lanesScrollRef.current.contains(e.target as Node);
-      const horizontalIntent = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
-      if (horizontalIntent || !overLanes) {
+
+      // 2. Horizontal swipe (or Shift+wheel) → pan through time.
+      const horizontal = Math.abs(dx) > Math.abs(dy);
+      if (e.shiftKey || horizontal) {
         e.preventDefault();
-        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        const delta = horizontal ? dx : dy;
         const next = clampScroll(
           v.scrollSec + delta / v.pixelsPerSecond,
           v,
@@ -66,8 +78,29 @@ export function Timeline() {
           contentDurationFromState(),
         );
         s.setScrollSec(next);
+        return;
       }
-      // else: plain vertical wheel over lanes → native row scroll (don't preventDefault)
+
+      // 3. Vertical, no modifier.
+      const lanes = lanesScrollRef.current;
+      const overLanes = !!lanes && lanes.contains(e.target as Node);
+      const canScrollList = !!lanes && lanes.scrollHeight > lanes.clientHeight + 1;
+
+      if (isWheelMouse(e)) {
+        // Mouse wheel: scroll the cue list only when hovering it and it overflows;
+        // otherwise zoom (over the ruler/waveform, or a list with nothing to scroll).
+        if (overLanes && canScrollList) return; // native row scroll
+        e.preventDefault();
+        s.zoomBy(zoomFactor(dy), focalX);
+        return;
+      }
+
+      // Trackpad vertical swipe → scroll the cue list like the scrollbar.
+      if (overLanes) return; // native row scroll (a no-op if it doesn't overflow)
+      if (lanes) {
+        e.preventDefault();
+        lanes.scrollTop += dy; // cursor is above the list — drive it manually
+      }
     };
     // Suppress the native middle-button autoscroll (Windows) so middle-drag pans instead;
     // preventDefault on the React pointerdown isn't reliable for this.
@@ -177,8 +210,8 @@ export function Timeline() {
 
       <div className="tl-strip">
         <div className="tl-prep-corner" />
-        <div className="tl-gutter-label" title={audio?.fileName}>
-          {audio ? audio.fileName : 'No audio'}
+        <div className="tl-gutter-label" title={audio?.fileName ?? audioLoading?.fileName}>
+          {audio ? audio.fileName : audioLoading ? (audioLoading.fileName ?? 'Loading…') : 'No audio'}
         </div>
         <div className="tl-lane" onPointerDown={onScrubDown} style={{ height: WAVEFORM_H }}>
           <WaveformCanvas width={laneWidth} height={WAVEFORM_H} />
@@ -205,6 +238,7 @@ export function Timeline() {
       />
 
       <Playhead />
+      <SnapGuide />
 
       {/* Two column dividers: prep|gutter at x=prepWidth, gutter|lane at x=prepWidth+gutterWidth. */}
       <ColumnResizer
@@ -284,6 +318,33 @@ function contentDurationFromState(): number {
   if (s.core.audio) return s.core.audio.duration;
   const maxEnd = s.core.blocks.reduce((m, b) => Math.max(m, b.end), 0);
   return maxEnd > 0 ? maxEnd : 60;
+}
+
+// ── wheel helpers ───────────────────────────────────────────────────────────────
+// Convert a wheel event to pixel deltas. Firefox reports line/page mode; normalising
+// lets a wheel "notch", a trackpad swipe and a pinch be compared on one scale.
+function normalizeWheel(e: WheelEvent): { dx: number; dy: number } {
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? window.innerHeight : 1;
+  return { dx: e.deltaX * unit, dy: e.deltaY * unit };
+}
+
+// Map a (normalised) vertical wheel delta to a multiplicative zoom factor. Magnitude-
+// aware so a chunky wheel notch and a fine trackpad pinch both feel right; exponential
+// so zooming in then out returns exactly where you started. Scroll up (dy<0) = zoom in.
+// Tuned so one ~100px notch ≈ 1.15×.
+const ZOOM_PER_PX = 0.0014;
+function zoomFactor(dyPx: number): number {
+  return Math.exp(-dyPx * ZOOM_PER_PX);
+}
+
+// Distinguish a physical wheel-mouse notch from a trackpad gesture. There's no perfect
+// signal (a Magic Mouse looks like a trackpad), so this is a heuristic tuned for the
+// common wheel-mouse + precision-touchpad mix; pinch/Ctrl zoom is the device-agnostic
+// fallback. Chunky integer pixel deltas with no horizontal component = wheel.
+function isWheelMouse(e: WheelEvent): boolean {
+  if (e.deltaMode !== 0) return true; // line/page mode → a classic wheel (e.g. Firefox)
+  if (e.deltaX !== 0) return false; // any horizontal component → trackpad
+  return Math.abs(e.deltaY) >= 100 && Number.isInteger(e.deltaY);
 }
 
 // ── horizontal scrollbar ──────────────────────────────────────────────────────

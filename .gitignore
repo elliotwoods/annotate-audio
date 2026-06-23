@@ -7,8 +7,16 @@ dist-ssr
 .vite
 coverage
 
+# Next.js
+/.next/
+/out/
+next-env.d.ts
+*.tsbuildinfo
+
 # Secrets & deployment
 .env
 .env.*
 !.env.example
+.vercel
+
 .vercel

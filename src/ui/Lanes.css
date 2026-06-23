@@ -86,8 +86,20 @@
 .lanes__lane--section:hover {
   background: var(--bg-2);
 }
-.lanes__lane--track {
-  background: var(--bg-1);
+
+/* "Current level" line: traces the held curve value across the row, behind the cues. */
+.lanes__held-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: visible;
+}
+.lanes__held-line path {
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
 }
 
 /* live drag-create preview rectangle */
@@ -102,36 +114,32 @@
   z-index: 6;
 }
 
-/* ── Track bar ────────────────────────────────────────────────────────────── */
-.track-bar {
+/* Roll handle at a touching cue boundary (one cue ends, the next begins) when neither is
+   selected: an invisible grab zone centred on the seam that reveals a vertical line on
+   hover. The ↔ cursor + line hint that a drag moves BOTH adjacent edges together. */
+.lanes__iface {
   position: absolute;
-  top: 6px;
-  height: calc(var(--row-h) - 14px);
+  top: 0;
+  bottom: 0;
+  width: 11px;
+  margin-left: -6px; /* centre the 11px zone on the boundary x */
   display: flex;
-  align-items: center;
-  padding: 0 8px;
-  border: 1px solid var(--waveform);
-  border-radius: var(--radius-sm);
-  background: rgba(91, 107, 140, 0.22);
-  overflow: hidden;
-  pointer-events: none;
+  justify-content: center;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 5; /* above unselected blocks so it intercepts the boundary */
 }
-.track-bar--empty {
-  left: 8px;
-  right: 8px;
-  border-style: dashed;
-  border-color: var(--line-strong);
+.lanes__iface::before {
+  content: '';
+  width: 2px;
+  align-self: stretch;
+  border-radius: 1px;
   background: transparent;
-  opacity: 0.6;
+  transition: background 0.12s, box-shadow 0.12s;
 }
-.track-bar__label {
-  font-size: 12px;
-  color: var(--text-1);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  position: sticky;
-  left: 0;
+.lanes__iface:hover::before {
+  background: var(--accent-hi);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--accent-hi) 65%, transparent);
 }
 
 /* ── Drag-and-drop drop indicator ─────────────────────────────────────────── */

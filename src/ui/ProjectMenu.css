@@ -1,0 +1,162 @@
+/* ProjectMenu — the project-name trigger + the panel it opens. */
+
+/* Trigger: reads as the document title, reveals a chevron + hover background. */
+.projectmenu-trigger {
+  flex: 0 0 auto;
+  max-width: 220px;
+  gap: 5px;
+  padding: 5px 8px;
+  background: transparent;
+  border-color: transparent;
+  font-weight: 600;
+}
+.projectmenu-trigger:hover:not(:disabled) {
+  background: var(--bg-3);
+}
+.projectmenu-trigger-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.projectmenu-trigger-chev {
+  color: var(--text-2);
+  flex: 0 0 auto;
+}
+
+/* Transparent full-window catcher so an outside click/tap closes the panel. */
+.projectmenu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+}
+
+.projectmenu {
+  position: fixed;
+  z-index: 251;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.projectmenu-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 0 -2px;
+}
+
+/* Rename field */
+.projectmenu-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.projectmenu-field-label {
+  color: var(--text-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.projectmenu-field input {
+  width: 100%;
+  font-weight: 600;
+}
+
+/* File actions: a tidy 2-column grid of ghost buttons. */
+.projectmenu-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.projectmenu-actions button {
+  justify-content: flex-start;
+}
+
+/* Cloud block */
+.projectmenu-cloud {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.projectmenu-cloud .primary {
+  justify-content: center;
+}
+.projectmenu-cloud-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ok);
+}
+.projectmenu-cloud-status.muted {
+  color: var(--text-2);
+}
+
+.projectmenu-notice {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: var(--warn);
+  font-size: 12px;
+}
+
+/* List sections (snapshots / recent) */
+.projectmenu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.projectmenu-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 2px 2px;
+}
+.projectmenu-link {
+  font-size: 11px;
+  padding: 2px 6px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-1);
+}
+.projectmenu-empty {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.projectmenu-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border-color: transparent;
+  text-align: left;
+  padding: 6px 8px;
+}
+.projectmenu-row:hover:not(:disabled) {
+  background: var(--bg-2);
+}
+.projectmenu-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.projectmenu-row-meta {
+  flex: 0 0 auto;
+  font-size: 11px;
+}

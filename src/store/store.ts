@@ -22,12 +22,25 @@ import type {
   AudioMeta,
   BeatGrid,
   Block,
+  CueMode,
+  CurveData,
+  CurveType,
   Project,
   ProjectCore,
   Row,
-  SnapResolution,
+  SegmentShape,
+  SnapSettings,
   ViewState,
 } from '../model/types';
+import {
+  makeCurve,
+  defaultPointsFor,
+  normalizePoints,
+  moveCurvePoint as moveCurvePt,
+  addCurvePoint as addCurvePt,
+  deleteCurvePoint as deleteCurvePt,
+  setPointShape as setPointShapeAt,
+} from '../core/curve';
 import {
   makeBlock,
   makeCueRow,
@@ -37,6 +50,7 @@ import {
   splitProject,
 } from '../model/defaults';
 import { snapTime } from '../core/grid';
+import type { SnapGuide } from '../core/snap';
 import { xToTime, clampScroll } from '../core/transform';
 import { normalizeTree, isDescendant, subtreeIds } from '../core/rowtree';
 import type { PeaksData } from '../audio/peaksTypes';
@@ -49,6 +63,22 @@ export interface PlaybackState {
 
 /** Transient save/sync status for the top-bar indicator (never persisted/undone). */
 export type SaveStatus = 'idle' | 'saving' | 'saved';
+
+/** Transient automatic-cloud-save status for the top-bar indicator. */
+export type CloudSaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+
+/** Phases of an audio load, in order, used to label the waveform progress overlay. */
+export type AudioLoadPhase = 'reading' | 'decoding' | 'analyzing';
+
+/** Transient progress for an in-flight audio load (read → decode → peaks); null when idle. */
+export interface AudioLoadProgress {
+  phase: AudioLoadPhase;
+  /** Best-effort overall completion in [0, 1]. The decode phase has no real signal, so it
+   *  creeps; the file-read phase reflects actual bytes read. */
+  progress: number;
+  /** Name of the file being loaded, shown in the gutter/label. */
+  fileName?: string;
+}
 
 export type Confidence = 'low' | 'med' | 'high';
 
@@ -78,8 +108,23 @@ export interface StoreState {
   prepWidth: number;
   /** Computed waveform peaks for the loaded audio (transient; recomputed on load). */
   peaks: PeaksData | null;
-  /** Autosave/cloud-save status for the top-bar indicator (transient). */
+  /** Progress of an in-flight audio load, for the waveform overlay (transient). */
+  audioLoading: AudioLoadProgress | null;
+  /** Local-autosave status for the top-bar indicator (transient). */
   saveStatus: SaveStatus;
+  /** Automatic cloud-save status for the top-bar indicator (transient). */
+  cloudSave: CloudSaveStatus;
+  /** Epoch ms of the last successful cloud save, or null (transient). */
+  cloudSavedAt: number | null;
+  /** Active snap-guide target shown during a drag/resize, or null (transient). */
+  snapIndicator: SnapGuide | null;
+  /**
+   * Short human-readable label for the edit that produced the current `core` (e.g.
+   * "Set BPM 128", "Move block"). Set by `mutate`, included in zundo's `partialize` so each
+   * history snapshot carries its own label and the label travels with undo/redo. Drives the
+   * History dropdown; not persisted (it isn't part of `core`).
+   */
+  historyLabel: string;
 
   // ── project / meta ──────────────────────────────────────────────────────
   newProject: (name?: string) => void;
@@ -95,7 +140,9 @@ export interface StoreState {
   setProjectName: (name: string) => void;
   setAudioMeta: (meta: AudioMeta | null) => void;
   setPeaks: (peaks: PeaksData | null) => void;
+  setAudioLoading: (state: AudioLoadProgress | null) => void;
   setSaveStatus: (status: SaveStatus) => void;
+  setCloudSave: (status: CloudSaveStatus, at?: number | null) => void;
 
   // ── grid ────────────────────────────────────────────────────────────────
   setGrid: (partial: Partial<BeatGrid>) => void;
@@ -109,7 +156,10 @@ export interface StoreState {
   setView: (partial: Partial<ViewState>) => void;
   setPixelsPerSecond: (pps: number) => void;
   setScrollSec: (sec: number) => void;
-  setSnap: (snap: SnapResolution) => void;
+  /** Patch the snap settings (master toggle, cues toggle, single-select grid). */
+  setSnap: (partial: Partial<SnapSettings>) => void;
+  /** Set or clear the transient snap-guide indicator (during a drag/resize). */
+  setSnapIndicator: (indicator: SnapGuide | null) => void;
   setFollow: (follow: boolean) => void;
   toggleFollow: () => void;
   setLaneWidth: (px: number) => void;
@@ -154,6 +204,20 @@ export interface StoreState {
   setBlockLabel: (id: string, label: string) => void;
   toggleBlockPoint: (id: string) => void;
   deleteBlocks: (ids: string[]) => void;
+
+  // ── cue curves ──────────────────────────────────────────────────────────────
+  /** Switch a cue between text and curve mode; seeds/keeps curve data, preserves label. */
+  setCueMode: (id: string, mode: CueMode) => void;
+  /** Replace a curve's type, resetting its points to that type's canonical layout. */
+  setCurveType: (id: string, type: CurveType) => void;
+  /** Move curve point `i` to (t,v) in normalized [0,1] space (endpoints lock t). */
+  moveCurvePoint: (id: string, i: number, t: number, v: number) => void;
+  /** Insert a curve point at (t,v); inherits the split segment's shape. */
+  addCurvePoint: (id: string, t: number, v: number) => void;
+  /** Delete interior curve point `i` (endpoints are protected). */
+  deleteCurvePoint: (id: string, i: number) => void;
+  /** Set the leaving-segment shape of curve point `i` (inert on the last point). */
+  setPointShape: (id: string, i: number, shape: SegmentShape) => void;
   deleteSelected: () => void;
 
   // ── selection ─────────────────────────────────────────────────────────────
@@ -231,9 +295,17 @@ function nextSiblingOrder(rows: Row[], parentId: string | null): number {
 export const useStore = create<StoreState>()(
   temporal(
     (set, get) => {
-      /** Apply an immutable change to core, bumping updatedAt. */
-      const mutate = (changes: Partial<ProjectCore>) =>
-        set((s) => ({ core: { ...s.core, ...changes, updatedAt: now() } }));
+      /**
+       * Apply an immutable change to core, bumping updatedAt. An optional `label` describes
+       * the edit for the undo history (the History dropdown); when omitted the previous label
+       * is kept. zundo captures the PRE-change `{ core, historyLabel }`, so the label set here
+       * becomes the description of the state this edit produces.
+       */
+      const mutate = (changes: Partial<ProjectCore>, label?: string) =>
+        set((s) => ({
+          core: { ...s.core, ...changes, updatedAt: now() },
+          ...(label !== undefined ? { historyLabel: label } : {}),
+        }));
 
       return {
         core: freshCore(),
@@ -245,7 +317,12 @@ export const useStore = create<StoreState>()(
         gutterWidth: loadGutterWidth(),
         prepWidth: loadPrepWidth(),
         peaks: null,
+        audioLoading: null,
         saveStatus: 'idle',
+        cloudSave: 'idle',
+        cloudSavedAt: null,
+        snapIndicator: null,
+        historyLabel: 'Opened',
 
         // ── project / meta ───────────────────────────────────────────────
         newProject: (name) => {
@@ -257,6 +334,7 @@ export const useStore = create<StoreState>()(
             detection: null,
             peaks: null,
             playback: { isPlaying: false, positionSec: 0 },
+            historyLabel: 'New project',
           });
           queueMicrotask(() => store.temporal.getState().clear());
         },
@@ -272,6 +350,7 @@ export const useStore = create<StoreState>()(
             detection: null,
             peaks: null,
             playback: { isPlaying: false, positionSec: 0 },
+            historyLabel: 'Opened',
           });
           queueMicrotask(() => store.temporal.getState().clear());
         },
@@ -284,6 +363,10 @@ export const useStore = create<StoreState>()(
               core: { ...remoteCore, rows: normalizeTree(remoteCore.rows) },
               // Drop any selection that referenced blocks the collaborator deleted.
               selection: s.selection.filter((id) => liveIds.has(id)),
+              // Label the live state so a later local edit's pre-change snapshot isn't tagged
+              // with this user's stale last-edit label. (The remote apply itself runs paused
+              // via applyRemoteCoreNoHistory, so it never becomes its own history entry.)
+              historyLabel: 'Synced from collaborator',
               // view / playback / peaks / detection are intentionally left untouched.
             };
           }),
@@ -297,7 +380,7 @@ export const useStore = create<StoreState>()(
           return joinProject(s.core, s.view);
         },
 
-        setProjectName: (name) => mutate({ name }),
+        setProjectName: (name) => mutate({ name }, 'Rename project'),
 
         setAudioMeta: (meta) =>
           set((s) => {
@@ -306,25 +389,37 @@ export const useStore = create<StoreState>()(
                   r.kind === 'track' ? { ...r, name: meta.fileName || r.name } : r,
                 )
               : s.core.rows;
-            return { core: { ...s.core, audio: meta, rows, updatedAt: now() } };
+            return {
+              core: { ...s.core, audio: meta, rows, updatedAt: now() },
+              historyLabel: meta ? 'Load audio' : 'Remove audio',
+            };
           }),
 
         setPeaks: (peaks) => set({ peaks }),
+        setAudioLoading: (audioLoading) => set({ audioLoading }),
         setSaveStatus: (saveStatus) => set({ saveStatus }),
+        setCloudSave: (cloudSave, at) =>
+          set(at === undefined ? { cloudSave } : { cloudSave, cloudSavedAt: at }),
 
         // ── grid ──────────────────────────────────────────────────────────
-        setGrid: (partial) => mutate({ grid: { ...get().core.grid, ...partial } }),
+        setGrid: (partial) => mutate({ grid: { ...get().core.grid, ...partial } }, 'Edit grid'),
         setBpm: (bpm) => {
           if (!Number.isFinite(bpm) || bpm <= 0) return;
-          mutate({ grid: { ...get().core.grid, bpm } });
+          mutate({ grid: { ...get().core.grid, bpm } }, `Set BPM ${bpm}`);
         },
-        setOffset: (offset) => mutate({ grid: { ...get().core.grid, offset } }),
+        setOffset: (offset) => mutate({ grid: { ...get().core.grid, offset } }, 'Set offset'),
         nudgeOffset: (deltaSec) =>
-          mutate({ grid: { ...get().core.grid, offset: get().core.grid.offset + deltaSec } }),
-        setOffsetToTime: (t) => mutate({ grid: { ...get().core.grid, offset: t } }),
+          mutate(
+            { grid: { ...get().core.grid, offset: get().core.grid.offset + deltaSec } },
+            'Nudge offset',
+          ),
+        setOffsetToTime: (t) => mutate({ grid: { ...get().core.grid, offset: t } }, 'Set offset'),
         setTimeSig: (beatsPerBar, beatUnit) => {
           if (beatsPerBar < 1 || beatUnit < 1) return;
-          mutate({ grid: { ...get().core.grid, beatsPerBar, beatUnit } });
+          mutate(
+            { grid: { ...get().core.grid, beatsPerBar, beatUnit } },
+            `Time signature ${beatsPerBar}/${beatUnit}`,
+          );
         },
 
         // ── view (not undoable, not via mutate) ────────────────────────────
@@ -332,7 +427,23 @@ export const useStore = create<StoreState>()(
         setPixelsPerSecond: (pps) =>
           set((s) => ({ view: { ...s.view, pixelsPerSecond: Math.max(1, pps) } })),
         setScrollSec: (sec) => set((s) => ({ view: { ...s.view, scrollSec: Math.max(0, sec) } })),
-        setSnap: (snap) => set((s) => ({ view: { ...s.view, snap } })),
+        setSnap: (partial) =>
+          set((s) => ({ view: { ...s.view, snap: { ...s.view.snap, ...partial } } })),
+        setSnapIndicator: (indicator) =>
+          set((s) => {
+            // No-op when unchanged so per-pointermove calls don't churn re-renders.
+            const cur = s.snapIndicator;
+            if (cur === indicator) return {};
+            if (
+              cur &&
+              indicator &&
+              cur.time === indicator.time &&
+              cur.kind === indicator.kind
+            ) {
+              return {};
+            }
+            return { snapIndicator: indicator };
+          }),
         setFollow: (follow) => set((s) => ({ view: { ...s.view, followPlayhead: follow } })),
         toggleFollow: () =>
           set((s) => ({ view: { ...s.view, followPlayhead: !s.view.followPlayhead } })),
@@ -407,7 +518,7 @@ export const useStore = create<StoreState>()(
         addCueRow: (parentId = null) => {
           const rows = get().core.rows;
           const row = makeCueRow(nextSiblingOrder(rows, parentId), cueRowCount(rows), parentId);
-          mutate({ rows: normalizeTree([...rows, row]) });
+          mutate({ rows: normalizeTree([...rows, row]) }, 'Add cue row');
           return row.id;
         },
 
@@ -415,7 +526,7 @@ export const useStore = create<StoreState>()(
           const rows = get().core.rows;
           const count = rows.filter((r) => r.kind === 'group').length;
           const row = makeGroupRow(nextSiblingOrder(rows, parentId), count, parentId);
-          mutate({ rows: normalizeTree([...rows, row]) });
+          mutate({ rows: normalizeTree([...rows, row]) }, 'Add group');
           return row.id;
         },
 
@@ -424,7 +535,7 @@ export const useStore = create<StoreState>()(
           if (!row || row.kind !== 'cue') return; // fixed rows / groups handled elsewhere
           const rows = normalizeTree(get().core.rows.filter((r) => r.id !== rowId));
           const blocks = get().core.blocks.filter((b) => b.rowId !== rowId);
-          mutate({ rows, blocks });
+          mutate({ rows, blocks }, 'Delete row');
           set((s) => ({ selection: s.selection.filter((id) => blocks.some((b) => b.id === id)) }));
         },
 
@@ -441,7 +552,7 @@ export const useStore = create<StoreState>()(
                   ? { ...r, parentId: group.parentId, order: group.order + (r.order + 1) * 1e-3 }
                   : r,
               );
-            mutate({ rows: normalizeTree(next) });
+            mutate({ rows: normalizeTree(next) }, 'Ungroup');
             return;
           }
           // delete: remove the whole subtree and the blocks on any removed cue rows.
@@ -451,21 +562,27 @@ export const useStore = create<StoreState>()(
           );
           const rows = normalizeTree(all.filter((r) => !ids.has(r.id)));
           const blocks = get().core.blocks.filter((b) => !removedCueIds.has(b.rowId));
-          mutate({ rows, blocks });
+          mutate({ rows, blocks }, 'Delete group');
           set((s) => ({ selection: s.selection.filter((id) => blocks.some((b) => b.id === id)) }));
         },
 
         updateRow: (rowId, partial) =>
-          mutate({
-            rows: get().core.rows.map((r) => (r.id === rowId ? { ...r, ...partial } : r)),
-          }),
+          mutate(
+            { rows: get().core.rows.map((r) => (r.id === rowId ? { ...r, ...partial } : r)) },
+            'name' in partial ? 'Rename row' : 'Edit row',
+          ),
 
-        toggleCollapse: (groupId) =>
-          mutate({
-            rows: get().core.rows.map((r) =>
-              r.id === groupId && r.kind === 'group' ? { ...r, collapsed: !r.collapsed } : r,
-            ),
-          }),
+        toggleCollapse: (groupId) => {
+          const group = get().core.rows.find((r) => r.id === groupId);
+          mutate(
+            {
+              rows: get().core.rows.map((r) =>
+                r.id === groupId && r.kind === 'group' ? { ...r, collapsed: !r.collapsed } : r,
+              ),
+            },
+            group && group.kind === 'group' && !group.collapsed ? 'Collapse group' : 'Expand group',
+          );
+        },
 
         moveRow: (rowId, dir) => {
           const rows = get().core.rows;
@@ -497,7 +614,7 @@ export const useStore = create<StoreState>()(
           else if (clamped >= dest.length) order = dest[dest.length - 1].order + 0.5;
           else order = (dest[clamped - 1].order + dest[clamped].order) / 2;
           const next = rows.map((r) => (r.id === rowId ? { ...r, parentId: newParentId, order } : r));
-          mutate({ rows: normalizeTree(next) });
+          mutate({ rows: normalizeTree(next) }, 'Move row');
         },
 
         reorderSiblings: (parentId, idsInOrder) => {
@@ -505,7 +622,7 @@ export const useStore = create<StoreState>()(
           const next = get().core.rows.map((r) =>
             (r.parentId ?? null) === parentId && pos.has(r.id) ? { ...r, order: pos.get(r.id)! } : r,
           );
-          mutate({ rows: normalizeTree(next) });
+          mutate({ rows: normalizeTree(next) }, 'Reorder rows');
         },
 
         reorderCueRows: (ids) => get().reorderSiblings(null, ids),
@@ -515,7 +632,7 @@ export const useStore = create<StoreState>()(
           const a = Math.max(0, Math.min(start, end));
           const b = Math.max(start, end);
           const block = makeBlock(rowId, a, b, label);
-          mutate({ blocks: [...get().core.blocks, block] });
+          mutate({ blocks: [...get().core.blocks, block] }, 'Add block');
           set({ selection: [block.id] });
           return block.id;
         },
@@ -523,15 +640,20 @@ export const useStore = create<StoreState>()(
         addPointCue: (rowId, time, label = '') => {
           const t = Math.max(0, time);
           const block: Block = { ...makeBlock(rowId, t, t, label), isPoint: true };
-          mutate({ blocks: [...get().core.blocks, block] });
+          mutate({ blocks: [...get().core.blocks, block] }, 'Add cue');
           set({ selection: [block.id] });
           return block.id;
         },
 
         updateBlock: (id, partial) =>
-          mutate({
-            blocks: get().core.blocks.map((b) => (b.id === id ? normalizeBlock({ ...b, ...partial }) : b)),
-          }),
+          mutate(
+            {
+              blocks: get().core.blocks.map((b) =>
+                b.id === id ? normalizeBlock({ ...b, ...partial }) : b,
+              ),
+            },
+            'Edit block',
+          ),
 
         moveBlock: (id, newStart, rowId) =>
           mutate({
@@ -547,7 +669,7 @@ export const useStore = create<StoreState>()(
               }
               return { ...b, rowId: nextRow, start, end: start + dur };
             }),
-          }),
+          }, 'Move block'),
 
         resizeBlock: (id, edge, time) =>
           mutate({
@@ -563,10 +685,13 @@ export const useStore = create<StoreState>()(
               const end = Math.max(t, b.start);
               return { ...b, end, isPoint: end <= b.start };
             }),
-          }),
+          }, 'Resize block'),
 
         setBlockLabel: (id, label) =>
-          mutate({ blocks: get().core.blocks.map((b) => (b.id === id ? { ...b, label } : b)) }),
+          mutate(
+            { blocks: get().core.blocks.map((b) => (b.id === id ? { ...b, label } : b)) },
+            'Label block',
+          ),
 
         toggleBlockPoint: (id) =>
           mutate({
@@ -579,18 +704,61 @@ export const useStore = create<StoreState>()(
               }
               return { ...b, isPoint: true, end: b.start };
             }),
-          }),
+          }, 'Toggle point'),
+
+        // ── cue curves ───────────────────────────────────────────────────────
+        setCueMode: (id, mode) =>
+          mutate({
+            blocks: get().core.blocks.map((b) => {
+              if (b.id !== id) return b;
+              if (mode === 'text') return normalizeBlock({ ...b, mode: 'text' });
+              // → curve: keep any existing curve, else seed one; a curve needs a span,
+              // so a point cue is first expanded to a bar-long ranged cue.
+              const curve = b.curve ?? makeCurve('ascending');
+              const ranged = b.isPoint
+                ? { isPoint: false, end: b.start + barSpan(get().core.grid) }
+                : {};
+              return normalizeBlock({ ...b, ...ranged, mode: 'curve', curve });
+            }),
+          }, 'Cue mode'),
+
+        setCurveType: (id, type) =>
+          updateCurveBlock(get, mutate, id, () => ({ type, points: defaultPointsFor(type) }), 'Curve type'),
+
+        moveCurvePoint: (id, i, t, v) =>
+          updateCurveBlock(get, mutate, id, (c) => ({
+            ...c,
+            points: moveCurvePt(c.points, i, t, v),
+          }), 'Move curve point'),
+
+        addCurvePoint: (id, t, v) =>
+          updateCurveBlock(get, mutate, id, (c) => ({ ...c, points: addCurvePt(c.points, t, v) }), 'Add curve point'),
+
+        deleteCurvePoint: (id, i) =>
+          updateCurveBlock(get, mutate, id, (c) => ({ ...c, points: deleteCurvePt(c.points, i) }), 'Delete curve point'),
+
+        setPointShape: (id, i, shape) =>
+          updateCurveBlock(get, mutate, id, (c) => ({
+            ...c,
+            points: setPointShapeAt(c.points, i, shape),
+          }), 'Curve point shape'),
 
         deleteBlocks: (ids) => {
           const set0 = new Set(ids);
-          mutate({ blocks: get().core.blocks.filter((b) => !set0.has(b.id)) });
+          mutate(
+            { blocks: get().core.blocks.filter((b) => !set0.has(b.id)) },
+            `Delete ${set0.size} ${set0.size === 1 ? 'block' : 'blocks'}`,
+          );
           set((s) => ({ selection: s.selection.filter((id) => !set0.has(id)) }));
         },
 
         deleteSelected: () => {
           const ids = new Set(get().selection);
           if (ids.size === 0) return;
-          mutate({ blocks: get().core.blocks.filter((b) => !ids.has(b.id)) });
+          mutate(
+            { blocks: get().core.blocks.filter((b) => !ids.has(b.id)) },
+            `Delete ${ids.size} ${ids.size === 1 ? 'block' : 'blocks'}`,
+          );
           set({ selection: [] });
         },
 
@@ -607,8 +775,10 @@ export const useStore = create<StoreState>()(
 
         // ── commands ─────────────────────────────────────────────────────
         resnapAllToGrid: () => {
-          const { grid, view } = { grid: get().core.grid, view: get().view };
-          const res: SnapResolution = view.snap === 'off' ? 'bar' : view.snap;
+          const grid = get().core.grid;
+          // Pull everything onto the selected grid division (bar if grid snapping is off).
+          // This is a deliberate grid re-quantise, so cue-magnet snapping doesn't apply here.
+          const res = get().view.snap.grid ?? 'bar';
           mutate({
             blocks: get().core.blocks.map((b) => {
               const start = snapTime(b.start, grid, res);
@@ -616,35 +786,49 @@ export const useStore = create<StoreState>()(
               const end = Math.max(start, snapTime(b.end, grid, res));
               return { ...b, start, end };
             }),
-          });
+          }, 'Re-snap to grid');
         },
 
         // ── detection ────────────────────────────────────────────────────
         setDetection: (state) => set({ detection: state }),
         applyDetection: (bpm, offset) =>
-          mutate({
-            grid: {
-              ...get().core.grid,
-              bpm,
-              ...(offset !== undefined ? { offset } : {}),
+          mutate(
+            {
+              grid: {
+                ...get().core.grid,
+                bpm,
+                ...(offset !== undefined ? { offset } : {}),
+              },
             },
-          }),
+            `Apply ${bpm} BPM`,
+          ),
       };
     },
     {
       // Only `core` is tracked for undo/redo (spec: view/playback/selection excluded).
-      partialize: (state): { core: ProjectCore } => ({ core: state.core }),
+      // `historyLabel` rides along so each snapshot is self-describing and the label travels
+      // with undo/redo; `equality` stays on `core` only (a label only changes with `core`).
+      partialize: (state): { core: ProjectCore; historyLabel: string } => ({
+        core: state.core,
+        historyLabel: state.historyLabel,
+      }),
       limit: HISTORY_LIMIT,
       equality: (a, b) => a.core === b.core,
     },
   ),
 );
 
+/** One zundo history snapshot: the partialized `{ core, historyLabel }`. */
+export interface HistoryEntry {
+  core: ProjectCore;
+  historyLabel: string;
+}
+
 // Late-bound self reference so actions can reach the temporal store.
 const store = useStore as typeof useStore & {
   temporal: StoreApi<{
-    pastStates: { core: ProjectCore }[];
-    futureStates: { core: ProjectCore }[];
+    pastStates: HistoryEntry[];
+    futureStates: HistoryEntry[];
     undo: (steps?: number) => void;
     redo: (steps?: number) => void;
     clear: () => void;
@@ -661,9 +845,12 @@ const store = useStore as typeof useStore & {
  * recording so the gesture's live mutations don't each create history. Call once at
  * gesture start (pointerdown of a block drag/resize).
  */
-export function beginHistoryGroup(): void {
+export function beginHistoryGroup(label: string): void {
   const t = store.temporal.getState();
-  const snapshot = { core: useStore.getState().core };
+  // Snapshot the PRE-gesture state with its existing label (keeps that history row
+  // self-describing), then stamp the live label for the state this gesture will produce.
+  const cur = useStore.getState();
+  const snapshot: HistoryEntry = { core: cur.core, historyLabel: cur.historyLabel };
   store.temporal.setState((s) => {
     // Enforce the same cap zundo applies in its internal _handleSet, since this manual
     // push bypasses it (otherwise grouped gestures would grow history without bound).
@@ -673,6 +860,7 @@ export function beginHistoryGroup(): void {
         : s.pastStates;
     return { pastStates: [...past, snapshot], futureStates: [] };
   });
+  useStore.setState({ historyLabel: label });
   t.pause();
 }
 
@@ -698,11 +886,11 @@ export function applyRemoteCoreNoHistory(core: ProjectCore): void {
   }
 }
 
-export function undo(): void {
-  store.temporal.getState().undo();
+export function undo(steps = 1): void {
+  store.temporal.getState().undo(steps);
 }
-export function redo(): void {
-  store.temporal.getState().redo();
+export function redo(steps = 1): void {
+  store.temporal.getState().redo(steps);
 }
 export function clearHistory(): void {
   store.temporal.getState().clear();
@@ -724,9 +912,32 @@ function barSpan(grid: BeatGrid): number {
 }
 
 function normalizeBlock(b: Block): Block {
-  if (b.isPoint) return { ...b, end: b.start };
+  // Keep curve points ordered, clamped and endpoint-pinned no matter which path mutated them.
+  const base = b.curve ? { ...b, curve: { ...b.curve, points: normalizePoints(b.curve.points) } } : b;
+  if (base.isPoint) return { ...base, end: base.start };
   // A zero- (or negative-) duration ranged cue collapses to a milestone marker.
-  if (b.end <= b.start) return { ...b, isPoint: true, end: b.start };
-  return b;
+  if (base.end <= base.start) return { ...base, isPoint: true, end: base.start };
+  return base;
+}
+
+/**
+ * Apply a transform to a block's curve and write it back (normalized). No-op when the block
+ * is missing or has no curve. Used by the curve point/type/shape actions.
+ */
+function updateCurveBlock(
+  get: () => StoreState,
+  mutate: (changes: Partial<ProjectCore>, label?: string) => void,
+  id: string,
+  fn: (c: CurveData) => CurveData,
+  label?: string,
+): void {
+  mutate(
+    {
+      blocks: get().core.blocks.map((b) =>
+        b.id === id && b.curve ? normalizeBlock({ ...b, curve: fn(b.curve) }) : b,
+      ),
+    },
+    label,
+  );
 }
 

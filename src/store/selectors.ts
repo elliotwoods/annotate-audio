@@ -13,9 +13,14 @@ export const useAudio = () => useStore((s) => s.core.audio);
 export const useProjectName = () => useStore((s) => s.core.name);
 export const useProjectId = () => useStore((s) => s.core.id);
 export const useSelection = () => useStore((s) => s.selection);
+/** Whether the project has content worth sharing (audio loaded or ≥1 block). Drives auto-publish
+ *  of a local set so its URL becomes a live edit link — mirror of `worthPublishing` in shareUrl.ts. */
+export const useHasShareableContent = () =>
+  useStore((s) => !!s.core.audio || s.core.blocks.length > 0);
 export const useIsPlaying = () => useStore((s) => s.playback.isPlaying);
 export const useDetection = () => useStore((s) => s.detection);
 export const useSnap = () => useStore((s) => s.view.snap);
+export const useSnapIndicator = () => useStore((s) => s.snapIndicator);
 
 /** All rows sorted by `order` (flat — does not account for the group tree). */
 export function useSortedRows(): Row[] {

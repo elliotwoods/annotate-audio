@@ -11,7 +11,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useView, useGrid } from '../store/selectors';
-import { useStore } from '../store/store';
+import { useStore, type AudioLoadProgress } from '../store/store';
 import { timeToX, xToTime, visibleRange } from '../core/transform';
 import { gridLines } from '../core/grid';
 import type { PeaksData } from '../audio/peaksTypes';
@@ -23,6 +23,7 @@ export function WaveformCanvas({ width, height }: { width: number; height: numbe
   const view = useView();
   const grid = useGrid();
   const peaks = useStore((s) => s.peaks);
+  const audioLoading = useStore((s) => s.audioLoading);
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
 
   useEffect(() => {
@@ -96,9 +97,44 @@ export function WaveformCanvas({ width, height }: { width: number; height: numbe
   return (
     <div className="waveform-canvas-wrap">
       <canvas ref={canvasRef} className="waveform-canvas" />
-      {!peaks && width > 0 && height > 0 ? (
+      {/* While audio loads, a progress bar spans the strip; it's replaced by the real
+          waveform the moment peaks land and `audioLoading` clears. The "no audio" hint
+          only shows when truly idle (no peaks, not loading). */}
+      {audioLoading ? (
+        <AudioLoadingBar state={audioLoading} />
+      ) : !peaks && width > 0 && height > 0 ? (
         <div className="waveform-canvas-hint">Drag an audio file here, or click “Load audio”</div>
       ) : null}
+    </div>
+  );
+}
+
+const PHASE_LABEL: Record<AudioLoadProgress['phase'], string> = {
+  reading: 'Reading file',
+  decoding: 'Decoding audio',
+  analyzing: 'Analyzing waveform',
+};
+
+/** A progress bar shown across the waveform strip while an audio file loads. */
+function AudioLoadingBar({ state }: { state: AudioLoadProgress }): JSX.Element {
+  const pct = Math.round(Math.min(1, Math.max(0, state.progress)) * 100);
+  return (
+    <div
+      className="waveform-loading"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={pct}
+      aria-label={`Loading audio — ${PHASE_LABEL[state.phase]}`}
+    >
+      <div className="waveform-loading__track">
+        <div className="waveform-loading__fill" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="waveform-loading__label">
+        {PHASE_LABEL[state.phase]}
+        {state.fileName ? <span className="waveform-loading__file"> · {state.fileName}</span> : null}
+        <span className="waveform-loading__pct"> · {pct}%</span>
+      </div>
     </div>
   );
 }

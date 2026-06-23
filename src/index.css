@@ -36,6 +36,8 @@
   --grid-sub: rgba(255, 255, 255, 0.03);
   --playhead: #ff5470;
   --ruler-bg: #0e1117;
+  --snap-cue: #fbbf24; /* amber — guide when aligning to another cue */
+  --snap-grid: #8b93a7; /* muted — guide when quantising to the grid */
 
   /* metrics */
   --gutter-w: 192px;

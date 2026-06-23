@@ -11,13 +11,6 @@
   white-space: nowrap;
 }
 
-.topbar-name {
-  flex: 0 0 auto;
-  width: 180px;
-  font-weight: 600;
-  background: var(--bg-2);
-}
-
 .topbar-group {
   display: flex;
   align-items: center;
@@ -111,6 +104,9 @@
 }
 .topbar-savestate.is-saved {
   color: var(--ok);
+}
+.topbar-savestate.is-error {
+  color: var(--danger);
 }
 .topbar-savestate svg {
   flex: 0 0 auto;

@@ -18,6 +18,21 @@
   opacity: 0.5;
 }
 
+/* Nesting indentation: one vertical guide rail per ancestor level, so group members
+   read as a clean tree. The rails stretch the full row height and step right by
+   GROUP_INDENT each, mirroring the depth used to flatten the tree. */
+.row-gutter__indent {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  margin-right: 3px;
+}
+.row-gutter__indent-rail {
+  flex: none;
+  align-self: stretch;
+  border-left: 1px solid var(--line);
+}
+
 /* Drag grip + collapse chevron */
 .row-gutter__grip {
   flex: none;
@@ -29,6 +44,15 @@
   border: none;
   cursor: grab;
   touch-action: none;
+  /* Shown only when the row is hovered/focused (or being dragged); its width stays
+     reserved so the row contents don't shift as it fades in. */
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s;
+}
+.row-gutter:hover .row-gutter__grip,
+.row-gutter:focus-within .row-gutter__grip,
+.row-gutter--dragging .row-gutter__grip {
+  opacity: 1;
 }
 .row-gutter__grip:hover {
   color: var(--text-0);

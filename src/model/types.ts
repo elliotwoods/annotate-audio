@@ -3,7 +3,32 @@
 
 export type RowKind = 'track' | 'section' | 'cue' | 'group';
 
+/**
+ * A grid subdivision used by {@link snapTime}/{@link snapStep}. `off` is a legacy value kept
+ * for those low-level grid helpers; the editor's grid snapping now uses {@link GridSnap}.
+ */
 export type SnapResolution = 'bar' | 'half' | 'quarter' | 'eighth' | 'off';
+
+/** The four grid divisions a single-select grid snap can use (a subset of SnapResolution). */
+export type GridSnap = 'bar' | 'half' | 'quarter' | 'eighth';
+
+/**
+ * Which snap targets are active while creating/moving/resizing cues (spec §12).
+ *
+ *  - `enabled` is the master switch: when false NOTHING snaps (equivalent to the old
+ *    `snap: 'off'`), regardless of the other fields.
+ *  - `cues` (independent toggle) snaps a dragged edge to the start/end of OTHER cues — a
+ *    screen-space magnet, so it aligns cues across tracks.
+ *  - `grid` is a SINGLE grid division to quantise to, or `null` for no grid snapping. It's
+ *    single-select because a finer division already covers the coarser ones' lines.
+ *
+ * Holding Alt during a gesture bypasses all of this regardless of the settings.
+ */
+export interface SnapSettings {
+  enabled: boolean;
+  cues: boolean;
+  grid: GridSnap | null;
+}
 
 export interface BeatGrid {
   bpm: number; // > 0, constant
@@ -32,13 +57,53 @@ export interface Row {
   prepCue?: string;
 }
 
+/** Whether a cue presents as free text or as an envelope curve. Absent ⇒ 'text'. */
+export type CueMode = 'text' | 'curve';
+
+/**
+ * Canonical curve presets the user can pick from the type buttons (spec: curve types).
+ * `trapezium` is an attack/sustain/release shape (rise, flat hold, fall) with two movable
+ * "shoulder" points.
+ */
+export type CurveType = 'ascending' | 'descending' | 'peak' | 'trapezium' | 'arbitrary';
+
+/**
+ * Easing applied to the segment LEAVING a point (toward the next one). The LAST point's
+ * shape is inert (no segment leaves it). Default 'linear'.
+ *  - exp: ease-in (slow start), log: ease-out (fast start, the "square root" shape),
+ *    scurve: smooth ease-in-out, step: hold then jump (square).
+ */
+export type SegmentShape = 'linear' | 'exp' | 'log' | 'scurve' | 'step';
+
+/**
+ * One control point of a curve envelope.
+ *  - `t`: normalized position along the block span, 0..1 (0 = block.start, 1 = block.end).
+ *  - `v`: normalized envelope value, 0..1 (0 = bottom, 1 = top). Abstract — no units.
+ *  - `shape`: easing of the segment leaving this point toward the next (inert on the last).
+ */
+export interface CurvePoint {
+  t: number; // 0..1
+  v: number; // 0..1
+  shape: SegmentShape;
+}
+
+/** Curve presentation data for a cue. Ordered by `t`; >= 2 points; first.t === 0, last.t === 1. */
+export interface CurveData {
+  type: CurveType;
+  points: CurvePoint[];
+}
+
 export interface Block {
   id: string; // uuid
   rowId: string;
   start: number; // seconds
   end: number; // seconds; for a point cue, end === start
   isPoint: boolean; // true => rendered as a marker, zero length
-  label: string; // free text
+  label: string; // free text (preserved even in curve mode)
+  /** Presentation mode. Absent ⇒ 'text'; curve mode iff mode === 'curve'. */
+  mode?: CueMode;
+  /** Envelope data, retained even in text mode so re-toggling restores it. */
+  curve?: CurveData;
 }
 
 export interface AudioMeta {
@@ -53,7 +118,7 @@ export interface AudioMeta {
 export interface ViewState {
   pixelsPerSecond: number; // zoom
   scrollSec: number; // left edge of viewport, in seconds
-  snap: SnapResolution;
+  snap: SnapSettings;
   followPlayhead: boolean;
 }
 

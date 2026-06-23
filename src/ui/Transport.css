@@ -82,25 +82,51 @@
   min-width: 9ch;
 }
 
-/* Snap / labelled field. */
-.transport-field {
-  display: flex;
-  align-items: center;
+/* Snapping: a master on/off toggle, an independent "Cues" toggle, and a single-select
+   grid-division group — replacing the old resolution dropdown. */
+.transport-snap {
   gap: 6px;
-  text-transform: none;
-  letter-spacing: normal;
 }
 
-.transport-field-label {
-  color: var(--text-2);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.transport-field select {
+.transport-snap-master {
   min-height: 32px;
 }
+.transport-snap-master span {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.transport-snap-cue {
+  min-height: 32px;
+  font-size: 12px;
+}
+
+/* The four grid divisions as one segmented single-select control. */
+.transport-snap-grid {
+  display: inline-flex;
+  align-items: center;
+  /* Hairline seams between adjacent toggles read as one segmented control. */
+  gap: 1px;
+  padding: 2px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.transport-snap-toggle {
+  min-height: 26px;
+  min-width: 30px;
+  justify-content: center;
+  padding: 3px 8px;
+  font-size: 12px;
+  background: transparent;
+  border-color: transparent;
+}
+.transport-snap-toggle:hover:not(:disabled) {
+  background: var(--bg-3);
+  border-color: transparent;
+}
+/* Disabled (master off) toggles already dim via the global button:disabled rule. */
 
 .transport-follow span {
   font-size: 12px;

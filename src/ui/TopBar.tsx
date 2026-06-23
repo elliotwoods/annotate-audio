@@ -1,43 +1,38 @@
-// TopBar (spec §7, §13.1, §14): project name, New/Open, Import/Export JSON,
-// Load audio, then the manual grid controls (BpmControls) and the auto-detect
-// suggestion panel (DetectPanel). All persistence/audio side effects surface a
-// clear, non-silent error (spec §8.1).
+// TopBar (spec §7, §13.1, §14): the project menu (rename / file ops / cloud / snapshots),
+// audio loading, the manual grid controls (BpmControls), tempo tools, and a right-hand
+// cluster for sound / live status / sharing / account. File and project management now live
+// in ProjectMenu (opened from the project name); cloud saving is automatic
+// (persistence/cloudAutosave). All persistence/audio side effects surface a clear,
+// non-silent error (spec §8.1).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  FilePlus,
-  FolderOpen,
-  Upload,
-  Download,
   FileMusic,
   CircleAlert,
   Magnet,
-  UploadCloud,
   Share2,
-  History,
   LogIn,
   UserCheck,
   Volume2,
   VolumeX,
   Radio,
   Users,
+  Undo2,
+  Redo2,
 } from 'lucide-react';
-import { useStore } from '../store/store';
-import { useProjectName, useProjectId } from '../store/selectors';
-import {
-  loadAudioFile,
-  startNewProject,
-  loadProjectWithAudio,
-  relinkAudioFile,
-} from '../audio/audioFile';
+import { useStore as useZustand } from 'zustand';
+import { useStore, undo, redo, temporalStore } from '../store/store';
+import { useProjectId } from '../store/selectors';
+import { loadAudioFile, loadProjectWithAudio, relinkAudioFile } from '../audio/audioFile';
 import { AudioDecodeError } from '../audio/AudioEngine';
 import { exportProjectToFile, importProjectFromFile } from '../persistence/json';
-import { saveCurrentToCloud } from '../persistence/cloudSync';
 import { isVerified, getProjectTokens } from '../auth/session';
 import { refreshCollab, type CollabState } from '../hooks/useCollab';
 import { useSoundToggle } from '../hooks/useSoundToggle';
 import { BpmControls } from './BpmControls';
 import { TempoPopover } from './TempoPopover';
+import { ProjectMenu } from './ProjectMenu';
+import { HistoryMenu } from './HistoryMenu';
 import { LoginDialog } from './LoginDialog';
 import { ShareDialog } from './ShareDialog';
 import { SnapshotsDialog } from './SnapshotsDialog';
@@ -84,11 +79,12 @@ export function TopBar({
   onOpenLibrary: () => void;
   collab: CollabState;
 }) {
-  const name = useProjectName();
   const projectId = useProjectId();
-  const setProjectName = useStore((s) => s.setProjectName);
   const resnapAllToGrid = useStore((s) => s.resnapAllToGrid);
   const { muted, toggle: toggleSound } = useSoundToggle();
+
+  const canUndo = useZustand(temporalStore, (t) => t.pastStates.length > 0);
+  const canRedo = useZustand(temporalStore, (t) => t.futureStates.length > 0);
 
   const importInputRef = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
@@ -99,11 +95,9 @@ export function TopBar({
   // relink for this hash (spec §13.1) rather than a fresh load.
   const [pendingRelink, setPendingRelink] = useState<string | null>(null);
 
-  // ── cloud (sharing / snapshots / verified access) ──────────────────────────
-  // `cloudTick` bumps to recompute access after login or a save mutates session state.
+  // ── cloud (sharing / view-only / verified access) ──────────────────────────
+  // `cloudTick` bumps to recompute access after login or a publish mutates session state.
   const [cloudTick, setCloudTick] = useState(0);
-  const [cloudBusy, setCloudBusy] = useState(false);
-  const [cloudMsg, setCloudMsg] = useState<string | null>(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
@@ -117,30 +111,6 @@ export function TopBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, cloudTick]);
 
-  const handleSaveCloud = useCallback(async () => {
-    setError(null);
-    setCloudMsg(null);
-    setCloudBusy(true);
-    try {
-      const r = await saveCurrentToCloud();
-      setCloudTick((t) => t + 1);
-      // First save grants tokens → let the collab hook (re)join the live session.
-      refreshCollab();
-      setCloudMsg(r.created ? 'Saved to cloud — open Share for links.' : 'New snapshot saved.');
-    } catch (err) {
-      setError(`Cloud save failed: ${errorMessage(err)}`);
-    } finally {
-      setCloudBusy(false);
-    }
-  }, []);
-
-  // Auto-clear the transient success note.
-  useEffect(() => {
-    if (!cloudMsg) return;
-    const t = setTimeout(() => setCloudMsg(null), 4000);
-    return () => clearTimeout(t);
-  }, [cloudMsg]);
-
   const handleExport = useCallback(() => {
     setError(null);
     try {
@@ -150,7 +120,7 @@ export function TopBar({
     }
   }, []);
 
-  // Core load logic, reused by the file inputs AND drag-and-drop.
+  // Core load logic, reused by the file input AND drag-and-drop.
   const importProject = useCallback(async (file: File) => {
     setError(null);
     setPendingRelink(null);
@@ -280,66 +250,38 @@ export function TopBar({
 
   return (
     <header className="topbar" style={{ height: 'var(--topbar-h)' }}>
-      <input
-        className="topbar-name"
-        type="text"
-        value={name}
-        aria-label="Project name"
-        placeholder="Untitled project"
-        onChange={(e) => setProjectName(e.target.value)}
+      <ProjectMenu
+        onImport={() => importInputRef.current?.click()}
+        onExport={handleExport}
+        onOpenLibrary={onOpenLibrary}
+        onOpenSnapshots={() => setSnapshotsOpen(true)}
+        onCloudChanged={() => setCloudTick((t) => t + 1)}
       />
 
       <div className="divider" />
 
       <div className="topbar-group">
-        <button type="button" className="ghost" onClick={() => startNewProject()} title="New project">
-          <FilePlus size={15} aria-hidden /> New
-        </button>
-        <button type="button" className="ghost" onClick={onOpenLibrary} title="Open project">
-          <FolderOpen size={15} aria-hidden /> Open
+        <button
+          type="button"
+          className="ghost icon"
+          onClick={() => undo()}
+          disabled={!canUndo}
+          title="Undo — Ctrl+Z"
+          aria-label="Undo"
+        >
+          <Undo2 size={15} aria-hidden />
         </button>
         <button
           type="button"
-          className="ghost"
-          onClick={() => importInputRef.current?.click()}
-          title="Import a .cuetl.json project file"
+          className="ghost icon"
+          onClick={() => redo()}
+          disabled={!canRedo}
+          title="Redo — Ctrl+Shift+Z"
+          aria-label="Redo"
         >
-          <Upload size={15} aria-hidden /> Import
+          <Redo2 size={15} aria-hidden />
         </button>
-        <button
-          type="button"
-          className="ghost"
-          onClick={handleExport}
-          title="Export this project as JSON"
-        >
-          <Download size={15} aria-hidden /> Export
-        </button>
-      </div>
-
-      <div className="divider" />
-
-      <div className="topbar-group">
-        {cloud.editable && (
-          <button
-            type="button"
-            className="ghost"
-            onClick={() => void handleSaveCloud()}
-            disabled={cloudBusy}
-            title="Save a new snapshot to the cloud (never overwrites previous saves)"
-          >
-            <UploadCloud size={15} aria-hidden /> {cloudBusy ? 'Saving…' : 'Save to cloud'}
-          </button>
-        )}
-        {cloud.isCloud && (
-          <button
-            type="button"
-            className="ghost"
-            onClick={() => setSnapshotsOpen(true)}
-            title="Browse and open saved snapshots"
-          >
-            <History size={15} aria-hidden /> Snapshots
-          </button>
-        )}
+        <HistoryMenu />
       </div>
 
       <div className="divider" />
@@ -371,16 +313,15 @@ export function TopBar({
 
       <BpmControls />
 
-      <div className="topbar-group">
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => resnapAllToGrid()}
-          title="Pull every block onto the current grid (does not change stored audio positions until applied)"
-        >
-          <Magnet size={15} aria-hidden /> Re-snap all
-        </button>
-      </div>
+      <button
+        type="button"
+        className="ghost icon topbar-resnap"
+        onClick={() => resnapAllToGrid()}
+        title="Re-snap all — pull every block onto the current grid"
+        aria-label="Re-snap all blocks to the grid"
+      >
+        <Magnet size={15} aria-hidden />
+      </button>
 
       <div className="divider" />
 
@@ -431,7 +372,7 @@ export function TopBar({
           </button>
         )}
 
-        <SaveStateIndicator cloudBusy={cloudBusy} cloudMsg={cloudMsg} />
+        <SaveStateIndicator />
 
         {collab.enabled && (
           <span
@@ -451,11 +392,12 @@ export function TopBar({
         {cloud.isCloud && (
           <button
             type="button"
-            className="ghost"
+            className="ghost icon"
             onClick={() => setShareOpen(true)}
             title="Get shareable links for this set"
+            aria-label="Share"
           >
-            <Share2 size={15} aria-hidden /> Share
+            <Share2 size={15} aria-hidden />
           </button>
         )}
 
@@ -470,7 +412,7 @@ export function TopBar({
         </button>
       </div>
 
-      {/* Hidden file inputs driven by the buttons above. */}
+      {/* Hidden file inputs driven by ProjectMenu / Load-audio. */}
       <input
         ref={importInputRef}
         type="file"

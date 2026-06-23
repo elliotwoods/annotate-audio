@@ -111,9 +111,22 @@ Selectors (`src/store/selectors.ts`): `useView`, `useGrid`, `useAudio`, `useProj
 
 ## Snapping in interactions (spec §12)
 
-When creating/moving/resizing blocks: snap times with `snapTime(t, grid, view.snap)`. Holding
-**Alt** during the gesture disables snap regardless of the selector (read `e.altKey`).
-Transport jumps are already quantised in the transport singleton — don't re-snap them.
+`view.snap` is a `SnapSettings` object: a master `enabled` flag, an independent `cues`
+toggle, and a single-select `grid` (`'bar'|'half'|'quarter'|'eighth'|null`). Patch it via
+`setSnap(partial)`.
+
+When creating/moving/resizing blocks, snap with `core/snap.ts`: `snapTimeWith(t, ctx)` for a
+single edge (resize, create endpoints) and `snapMoveStart(start, dur, ctx)` for a whole-block
+move (either edge may magnet). `ctx` carries `grid`, `view.snap`, `pixelsPerSecond`, and the
+other cues' edge times from `cueEdgeTimes(blocks, draggedId)`. A nearby cue edge wins within
+an 8px screen-space magnet; otherwise the time quantises to the selected grid division.
+`snapTime(t, grid, res)` remains the low-level grid quantiser these build on.
+
+Each call returns a `SnapResult` (`{ value, guide }`); the gesture pushes `guide` to the
+transient `snapIndicator` store slice (clear to `null` on pointer up), which `SnapGuide`
+renders as a vertical guide line marking the snap target. Holding **Alt** during the gesture
+disables snapping regardless of the toggles (read `e.altKey`). Transport jumps are already
+quantised in the transport singleton — don't re-snap them.
 
 ## Defaults / decisions already made
 

@@ -1,0 +1,41 @@
+/* EditableNumber — resting "text with a dotted underline" + click-to-edit input. */
+
+.editable-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-0);
+  padding: 2px 3px;
+  border-bottom: 1px dotted var(--text-2);
+  border-radius: 2px;
+  cursor: text;
+  line-height: 1.2;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.editable-num:hover {
+  color: #fff;
+  border-bottom-color: var(--line-strong);
+  background: var(--bg-2);
+}
+.editable-num:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-bottom-color: transparent;
+}
+
+.editable-num__input {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  padding: 2px 4px;
+  /* Read as text: drop the native number spinners. */
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.editable-num__input::-webkit-outer-spin-button,
+.editable-num__input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}

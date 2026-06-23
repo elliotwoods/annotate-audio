@@ -6,7 +6,7 @@ import './StartDialog.css';
 import { getProjectTokens } from '../auth/session';
 
 function shareUrl(id: string, kind: 'v' | 'e', token: string): string {
-  const base = `${window.location.origin}${import.meta.env.BASE_URL}`;
+  const base = `${window.location.origin}/`;
   return `${base}?p=${encodeURIComponent(id)}&${kind}=${encodeURIComponent(token)}`;
 }
 
@@ -60,9 +60,15 @@ export function ShareDialog({
         ) : (
           <>
             {tokens.edit && (
+              <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+                Tip: this page’s address bar <strong>is</strong> your edit link — you can just copy
+                the URL straight from the browser to invite a collaborator.
+              </p>
+            )}
+            {tokens.edit && (
               <LinkRow
                 title="Edit link"
-                hint="Recipients can open and save new snapshots."
+                hint="Recipients can open and save new snapshots, live."
                 url={shareUrl(projectId, 'e', tokens.edit)}
                 copied={copied === 'edit'}
                 onCopy={(u) => void copy('edit', u)}

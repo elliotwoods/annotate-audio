@@ -1,7 +1,7 @@
 // Factory functions and constants for fresh projects, rows, and blocks (spec §4).
 
 import { uuid } from '../core/ids';
-import type { BeatGrid, Block, Project, ProjectCore, Row, ViewState } from './types';
+import type { BeatGrid, Block, Project, ProjectCore, Row, SnapSettings, ViewState } from './types';
 import { SCHEMA_VERSION } from './types';
 
 export const DEFAULT_BPM = 120;
@@ -13,10 +13,17 @@ export const DEFAULT_GRID: BeatGrid = {
   beatUnit: 4,
 };
 
+/** Snapping on out of the box: align to other cues and to bar lines. */
+export const DEFAULT_SNAP: SnapSettings = {
+  enabled: true,
+  cues: true,
+  grid: 'bar',
+};
+
 export const DEFAULT_VIEW: ViewState = {
   pixelsPerSecond: 80,
   scrollSec: 0,
-  snap: 'bar',
+  snap: { ...DEFAULT_SNAP },
   followPlayhead: true,
 };
 
@@ -117,7 +124,7 @@ export function makeProject(name = 'Untitled Show'): Project {
     grid: { ...DEFAULT_GRID },
     rows: [track, section, cue],
     blocks: [],
-    view: { ...DEFAULT_VIEW },
+    view: { ...DEFAULT_VIEW, snap: { ...DEFAULT_SNAP } },
     updatedAt: 0, // stamped by the store/persistence layer (avoid Date in pure factories)
   };
 }

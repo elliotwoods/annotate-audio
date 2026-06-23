@@ -9,7 +9,7 @@ import type { Project } from '../model/types';
 import { validateProject } from './json';
 import { getAdminKey, getProjectTokens, rememberTokens, tokenFor } from '../auth/session';
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? '';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '';
 
 export interface CloudProjectSummary {
   id: string;

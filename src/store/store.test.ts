@@ -134,6 +134,89 @@ describe('blocks', () => {
   });
 });
 
+describe('cue curves', () => {
+  it('setCueMode seeds an ascending curve and preserves the label', () => {
+    const cue = rowsByKind('cue')[0];
+    const id = s().addBlock(cue.id, 1, 3, 'Build up');
+    s().setCueMode(id, 'curve');
+    const b = s().core.blocks.find((x) => x.id === id)!;
+    expect(b.mode).toBe('curve');
+    expect(b.curve?.type).toBe('ascending');
+    expect(b.curve?.points).toHaveLength(2);
+    expect(b.label).toBe('Build up'); // label kept, just hidden in curve mode
+  });
+
+  it('switching a point cue to curve expands it to a ranged span', () => {
+    const cue = rowsByKind('cue')[0];
+    const id = s().addPointCue(cue.id, 2);
+    s().setCueMode(id, 'curve');
+    const b = s().core.blocks.find((x) => x.id === id)!;
+    expect(b.isPoint).toBe(false);
+    expect(b.end).toBeGreaterThan(b.start);
+  });
+
+  it('curve→text→curve preserves both the label and the edited points', () => {
+    const cue = rowsByKind('cue')[0];
+    const id = s().addBlock(cue.id, 1, 3, 'Keep me');
+    s().setCueMode(id, 'curve');
+    s().setCurveType(id, 'arbitrary');
+    s().addCurvePoint(id, 0.5, 0.9);
+    const edited = s().core.blocks.find((x) => x.id === id)!.curve!.points.length;
+    expect(edited).toBe(3);
+
+    s().setCueMode(id, 'text');
+    const t = s().core.blocks.find((x) => x.id === id)!;
+    expect(t.mode).toBe('text');
+    expect(t.curve?.points).toHaveLength(3); // curve retained while in text mode
+
+    s().setCueMode(id, 'curve');
+    const c = s().core.blocks.find((x) => x.id === id)!;
+    expect(c.curve?.type).toBe('arbitrary');
+    expect(c.curve?.points).toHaveLength(3);
+    expect(c.label).toBe('Keep me');
+  });
+
+  it('setCurveType resets points to the type default', () => {
+    const cue = rowsByKind('cue')[0];
+    const id = s().addBlock(cue.id, 0, 4);
+    s().setCueMode(id, 'curve');
+    s().setCurveType(id, 'peak');
+    const b = s().core.blocks.find((x) => x.id === id)!;
+    expect(b.curve?.type).toBe('peak');
+    expect(b.curve?.points).toHaveLength(3); // ascending(2) → peak(3)
+  });
+
+  it('endpoint t stays pinned and values clamp when moving points', () => {
+    const cue = rowsByKind('cue')[0];
+    const id = s().addBlock(cue.id, 0, 4);
+    s().setCueMode(id, 'curve');
+    s().moveCurvePoint(id, 0, 0.7, 5); // try to move the first point's time and overshoot value
+    const p = s().core.blocks.find((x) => x.id === id)!.curve!.points;
+    expect(p[0].t).toBe(0); // endpoint time locked
+    expect(p[0].v).toBe(1); // value clamped to 1
+  });
+
+  it('groups a point drag into a single undo step', () => {
+    const cue = rowsByKind('cue')[0];
+    const id = s().addBlock(cue.id, 0, 4);
+    s().setCueMode(id, 'curve');
+    s().setCurveType(id, 'peak');
+    clearHistory();
+
+    beginHistoryGroup('Move curve point');
+    s().moveCurvePoint(id, 1, 0.4, 0.8);
+    s().moveCurvePoint(id, 1, 0.6, 0.9);
+    s().moveCurvePoint(id, 1, 0.55, 0.95);
+    endHistoryGroup();
+
+    const moved = s().core.blocks.find((x) => x.id === id)!.curve!.points[1];
+    expect(moved.t).toBeCloseTo(0.55, 6);
+    undo(); // one undo reverts the whole drag back to the peak default (mid at 0.5)
+    const reverted = s().core.blocks.find((x) => x.id === id)!.curve!.points[1];
+    expect(reverted.t).toBeCloseTo(0.5, 6);
+  });
+});
+
 describe('grid edits leave blocks at stored seconds (spec §5.2)', () => {
   it('changing BPM does not move existing block times', () => {
     const cue = rowsByKind('cue')[0];
@@ -160,7 +243,7 @@ describe('undo / redo (zundo)', () => {
   it('groups a gesture into a single undo step', () => {
     const cue = rowsByKind('cue')[0];
     const id = s().addBlock(cue.id, 4, 6);
-    beginHistoryGroup();
+    beginHistoryGroup('Move block');
     s().moveBlock(id, 5);
     s().moveBlock(id, 6);
     s().moveBlock(id, 7); // three live moves within one gesture
@@ -170,14 +253,52 @@ describe('undo / redo (zundo)', () => {
     expect(s().core.blocks.find((x) => x.id === id)!.start).toBe(4);
   });
 
+  it('stamps a descriptive label on the live state for each edit', () => {
+    const cue = rowsByKind('cue')[0];
+    s().setBpm(128);
+    expect(s().historyLabel).toBe('Set BPM 128');
+    s().addBlock(cue.id, 1, 2);
+    expect(s().historyLabel).toBe('Add block');
+  });
+
+  it('carries the label with each history snapshot and through undo/redo', () => {
+    const cue = rowsByKind('cue')[0];
+    s().setBpm(140); // current label "Set BPM 140"
+    s().addBlock(cue.id, 1, 2); // current label "Add block"; "Set BPM 140" now in the past
+
+    const past = temporalStore.getState().pastStates;
+    expect(past[past.length - 1].historyLabel).toBe('Set BPM 140');
+
+    undo(); // back to the post-setBpm state → live label is its own
+    expect(s().historyLabel).toBe('Set BPM 140');
+    expect(temporalStore.getState().futureStates[0].historyLabel).toBe('Add block');
+
+    redo();
+    expect(s().historyLabel).toBe('Add block');
+  });
+
+  it('labels a grouped gesture as a single self-describing entry', () => {
+    const cue = rowsByKind('cue')[0];
+    const id = s().addBlock(cue.id, 4, 6); // live label "Add block"
+    beginHistoryGroup('Move block');
+    s().moveBlock(id, 7);
+    endHistoryGroup();
+    expect(s().historyLabel).toBe('Move block');
+    // The snapshot pushed at gesture start keeps the pre-gesture label.
+    const past = temporalStore.getState().pastStates;
+    expect(past[past.length - 1].historyLabel).toBe('Add block');
+    undo();
+    expect(s().historyLabel).toBe('Add block');
+  });
+
   it('does not track view changes (zoom/scroll/snap) in history', () => {
     const cue = rowsByKind('cue')[0];
     s().addBlock(cue.id, 1, 2);
-    s().setSnap('eighth');
+    s().setSnap({ grid: 'eighth' });
     s().setScrollSec(5);
     undo(); // should revert the block add, not the view changes
     expect(s().core.blocks).toHaveLength(0);
-    expect(s().view.snap).toBe('eighth');
+    expect(s().view.snap.grid).toBe('eighth');
     expect(s().view.scrollSec).toBe(5);
   });
 });
@@ -365,7 +486,7 @@ describe('collaborative apply (applyRemoteCore)', () => {
 
   it('does not let a remote apply resume undo tracking if it was paused', () => {
     // Mid-gesture (tracking paused), an inbound remote edit must not re-enable recording.
-    beginHistoryGroup();
+    beginHistoryGroup('Move block');
     expect(temporalStore.getState().isTracking).toBe(false);
     const remote = { ...s().core, name: 'During gesture', updatedAt: s().core.updatedAt + 1 };
     applyRemoteCoreNoHistory(remote);

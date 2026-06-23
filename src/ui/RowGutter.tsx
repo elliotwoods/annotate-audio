@@ -75,8 +75,16 @@ export function RowGutter({ row, depth, dragging, onGripPointerDown }: RowGutter
   return (
     <div
       className={`row-gutter row-gutter--${row.kind}${dragging ? ' row-gutter--dragging' : ''}`}
-      style={{ boxShadow: `inset 3px 0 0 ${row.color}`, paddingLeft: 6 + depth * GROUP_INDENT }}
+      style={{ boxShadow: `inset 3px 0 0 ${row.color}` }}
     >
+      {depth > 0 && (
+        <span className="row-gutter__indent" aria-hidden="true">
+          {Array.from({ length: depth }, (_, i) => (
+            <span key={i} className="row-gutter__indent-rail" style={{ width: GROUP_INDENT }} />
+          ))}
+        </span>
+      )}
+
       {!isFixed && (
         <button
           type="button"

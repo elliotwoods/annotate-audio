@@ -7,12 +7,14 @@ import { StartDialog } from './ui/StartDialog';
 import { useKeyboard } from './hooks/useKeyboard';
 import { useCollab } from './hooks/useCollab';
 import { applyPersistedMute } from './hooks/useSoundToggle';
-import { useProjectId } from './store/selectors';
+import { useProjectId, useHasShareableContent } from './store/selectors';
 import { startAutosave } from './persistence/autosave';
+import { startCloudAutosave } from './persistence/cloudAutosave';
 import { listProjects } from './persistence/db';
 import { loadProjectWithAudio } from './audio/audioFile';
 import { openCloudProject } from './persistence/cloudSync';
 import { rememberTokens } from './auth/session';
+import { ensureShareableUrl } from './auth/shareUrl';
 
 /** Parse a shared-link request from the URL: ?p=<id>&v=<viewToken>&e=<editToken>. */
 function readShareLink(): { id: string; view?: string; edit?: string } | null {
@@ -22,38 +24,46 @@ function readShareLink(): { id: string; view?: string; edit?: string } | null {
   return { id, view: params.get('v') ?? undefined, edit: params.get('e') ?? undefined };
 }
 
-/** Drop the token params from the address bar (keep ?p=<id>) so they don't linger on screen. */
-function stripTokensFromUrl(id: string): void {
-  const clean = `${window.location.origin}${import.meta.env.BASE_URL}?p=${encodeURIComponent(id)}`;
-  window.history.replaceState(null, '', clean);
-}
-
 export default function App() {
   const [startOpen, setStartOpen] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  // Capture any incoming share link ONCE, synchronously during the first render, before the
+  // url-reflection effect below can rewrite the address bar.
+  const [bootLink] = useState(readShareLink);
   useKeyboard();
 
   // Live collaboration for the current (cloud) project.
   const projectId = useProjectId();
+  const hasShareableContent = useHasShareableContent();
   const collab = useCollab(projectId);
 
-  // Autosave for the whole session.
+  // Autosave for the whole session (local IndexedDB + automatic cloud snapshots).
   useEffect(() => startAutosave(), []);
+  useEffect(() => startCloudAutosave(), []);
 
   // Apply the persisted per-device mute preference once on boot.
   useEffect(() => applyPersistedMute(), []);
+
+  // Keep the address bar as a live edit link for the current project, so copy-pasting the URL
+  // loads THIS project on another computer — not the recipient's own most-recent one. For a
+  // still-local set, a verified user auto-publishes it to the cloud first so the link works.
+  // Re-runs when the project changes OR first gains shareable content (audio/blocks), so a set
+  // built up within one session also gets published once there's something to share.
+  useEffect(() => {
+    void ensureShareableUrl(projectId);
+  }, [projectId, hasShareableContent]);
 
   // On boot: a shared link (?p=…) takes precedence; otherwise reopen the most recent local
   // project, else offer the start dialog.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const link = readShareLink();
+      const link = bootLink;
       if (link) {
-        // Persist any tokens from the link, then clean them out of the address bar.
+        // Persist any tokens from the link. The url-reflection effect re-normalises the
+        // address bar to the canonical share link once the project loads.
         if (link.view) rememberTokens(link.id, { view: link.view });
         if (link.edit) rememberTokens(link.id, { edit: link.edit });
-        stripTokensFromUrl(link.id);
         try {
           const r = await openCloudProject(link.id);
           if (cancelled) return;
@@ -82,7 +92,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [bootLink]);
 
   return (
     <div className="app">

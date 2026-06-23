@@ -20,20 +20,23 @@ import {
   Maximize,
   ScanSearch,
   Crosshair,
+  Magnet,
 } from 'lucide-react';
 import { transport } from '../audio/transport';
 import { useStore } from '../store/store';
 import { useGrid, useIsPlaying, useSnap } from '../store/selectors';
 import { formatBarsBeats, formatClock } from '../core/grid';
-import type { SnapResolution } from '../model/types';
+import type { GridSnap } from '../model/types';
 import './Transport.css';
 
-const SNAP_OPTIONS: ReadonlyArray<{ value: SnapResolution; label: string }> = [
-  { value: 'bar', label: 'Bar' },
-  { value: 'half', label: '1/2' },
-  { value: 'quarter', label: '1/4' },
-  { value: 'eighth', label: '1/8' },
-  { value: 'off', label: 'Off' },
+// Grid divisions are single-select (a finer one already covers the coarser ones' lines);
+// clicking the active one deselects it (no grid snapping). "Snap to cues" is a separate,
+// independent toggle, and the master on/off lives separately again.
+const GRID_OPTIONS: ReadonlyArray<{ value: GridSnap; label: string; title: string }> = [
+  { value: 'bar', label: 'Bar', title: 'Snap to bar lines' },
+  { value: 'half', label: '½', title: 'Snap to half-bar lines' },
+  { value: 'quarter', label: '¼', title: 'Snap to quarter-bar lines (beats)' },
+  { value: 'eighth', label: '⅛', title: 'Snap to eighth-bar lines' },
 ];
 
 // Minimum interval between React state updates for the readout (~30fps).
@@ -171,21 +174,57 @@ export function Transport() {
 
       <div className="spacer" />
 
-      <div className="transport-group">
-        <label className="transport-field">
-          <span className="transport-field-label">Snap</span>
-          <select
-            value={snap}
-            onChange={(e) => setSnap(e.target.value as SnapResolution)}
-            aria-label="Snap resolution"
-          >
-            {SNAP_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
+      <div className="transport-group transport-snap" role="group" aria-label="Snapping">
+        <button
+          type="button"
+          className={`transport-snap-master${snap.enabled ? ' active' : ''}`}
+          onClick={() => setSnap({ enabled: !snap.enabled })}
+          aria-pressed={snap.enabled}
+          title={
+            snap.enabled
+              ? 'Snapping on — click to disable all snapping'
+              : 'Snapping off — click to enable'
+          }
+        >
+          <Magnet size={15} aria-hidden="true" />
+          <span>Snap</span>
+        </button>
+
+        <button
+          type="button"
+          className={`transport-snap-cue${snap.enabled && snap.cues ? ' active' : ''}`}
+          onClick={() => setSnap({ cues: !snap.cues })}
+          aria-pressed={snap.cues}
+          disabled={!snap.enabled}
+          title="Snap to other cues (align across tracks)"
+        >
+          Cues
+        </button>
+
+        <div
+          className="transport-snap-grid"
+          role="radiogroup"
+          aria-label="Grid snap resolution"
+        >
+          {GRID_OPTIONS.map((o) => {
+            const selected = snap.grid === o.value;
+            return (
+              <button
+                key={o.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                className={`transport-snap-toggle${snap.enabled && selected ? ' active' : ''}`}
+                // Single-select: pick this division, or clear it if it's already active.
+                onClick={() => setSnap({ grid: selected ? null : o.value })}
+                disabled={!snap.enabled}
+                title={o.title}
+              >
                 {o.label}
-              </option>
-            ))}
-          </select>
-        </label>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="divider" />

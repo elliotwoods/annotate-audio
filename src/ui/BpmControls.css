@@ -1,55 +1,45 @@
-/* BpmControls — manual grid fields (spec §7.3): BPM, offset, time-sig, tap tempo. */
+/* BpmControls — manual grid fields (spec §7.3): BPM, offset, time-sig.
+   Inline label + minimal EditableNumber values, with room to breathe. */
 .bpm-controls {
   display: flex;
-  align-items: flex-end;
-  gap: 12px;
+  align-items: center;
+  gap: 16px;
   flex: 0 0 auto;
 }
 
-.bpm-field {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.bpm-field > label {
-  line-height: 1;
-}
-
-.bpm-offset-row,
-.bpm-timesig,
-.bpm-tap-row {
+.bpm-item {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
 }
 
-.bpm-offset-input {
-  width: 78px;
-}
-
-.bpm-offset-row button.icon {
+.bpm-label {
+  color: var(--text-2);
   font-size: 11px;
-  padding: 5px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
-.bpm-timesig-input {
-  width: 44px;
-  text-align: center;
+.bpm-nudge {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 1px;
+}
+
+.bpm-nudge button.icon {
+  font-size: 11px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+
+.bpm-timesig {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .bpm-timesig-sep {
   color: var(--text-2);
   font-weight: 600;
-}
-
-.bpm-tap {
-  min-width: 64px;
-}
-
-.bpm-tap-estimate {
-  min-width: 78px;
-  color: var(--text-1);
-  font-size: 12px;
-  text-align: center;
 }

@@ -1,34 +1,37 @@
 // Compact save/sync status chip for the top-bar right cluster. Combines the (otherwise
-// silent) autosave state, the explicit cloud-save state, and a transient confirmation note.
-//
-// Live-collaboration status is shown separately by the collab pill in TopBar.
+// silent) local autosave state with the automatic cloud-save state, both read from the
+// store. Live-collaboration status is shown separately by the collab pill in TopBar.
 
-import { Check, Cloud, Loader } from 'lucide-react';
+import { Check, Cloud, CloudOff, Loader } from 'lucide-react';
 import { useStore } from '../store/store';
 
-export function SaveStateIndicator({
-  cloudBusy,
-  cloudMsg,
-}: {
-  cloudBusy: boolean;
-  cloudMsg: string | null;
-}) {
+export function SaveStateIndicator() {
   const saveStatus = useStore((s) => s.saveStatus);
+  const cloudSave = useStore((s) => s.cloudSave);
 
-  // Transient cloud confirmation wins — it's the most specific, user-initiated feedback.
-  if (cloudMsg) {
+  if (saveStatus === 'saving' || cloudSave === 'saving') {
     return (
-      <span className="topbar-savestate" title={cloudMsg}>
-        <Cloud size={13} aria-hidden /> {cloudMsg}
+      <span className="topbar-savestate is-saving">
+        <Loader size={13} aria-hidden className="spin" /> Saving…
       </span>
     );
   }
 
-  const saving = cloudBusy || saveStatus === 'saving';
-  if (saving) {
+  if (cloudSave === 'error') {
     return (
-      <span className="topbar-savestate is-saving">
-        <Loader size={13} aria-hidden className="spin" /> Saving…
+      <span
+        className="topbar-savestate is-error"
+        title="Cloud save failed — it will retry on your next edit"
+      >
+        <CloudOff size={13} aria-hidden /> Cloud save failed
+      </span>
+    );
+  }
+
+  if (cloudSave === 'saved') {
+    return (
+      <span className="topbar-savestate is-saved" title="All changes saved to the cloud">
+        <Cloud size={13} aria-hidden /> Saved to cloud
       </span>
     );
   }

@@ -7,12 +7,70 @@ import { AudioDecodeError } from './AudioEngine';
 import { computePeaks } from './peaksClient';
 import { hashArrayBuffer } from '../core/hash';
 import { useStore } from '../store/store';
+import type { AudioLoadPhase } from '../store/store';
 import { saveAudioBlob, getAudioBlob } from '../persistence/db';
 import type { AudioMeta, Project } from '../model/types';
 
 function formatLabel(file: File): string {
   const ext = file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase() : '';
   return file.type || (ext ? ext.toUpperCase() : 'audio');
+}
+
+// ── load-progress orchestration ─────────────────────────────────────────────────
+// The waveform overlay renders from the store's `audioLoading`. Only the file-read phase
+// has a real signal (bytes loaded); decodeAudioData and the peaks worker are opaque, so the
+// decode phase eases ("creeps") toward a ceiling to show liveness without faking completion.
+
+const READ_SHARE = 0.25; // the file read occupies [0, READ_SHARE] of the bar
+const DECODE_CEIL = 0.85; // decode creeps from READ_SHARE toward (never reaching) this
+
+function reportLoad(phase: AudioLoadPhase, progress: number, fileName?: string): void {
+  useStore.getState().setAudioLoading({ phase, progress, fileName });
+}
+
+/** Read a File to an ArrayBuffer, reporting fractional read progress in [0, 1]. */
+function readArrayBuffer(file: File, onProgress: (frac: number) => void): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) onProgress(e.loaded / e.total);
+    };
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read audio file'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/** Ease the decode progress from `from` toward `to` while the opaque decode runs; returns a stopper. */
+function startDecodeCreep(fileName: string | undefined, from: number, to: number): () => void {
+  let cur = from;
+  const id = setInterval(() => {
+    cur += (to - cur) * 0.08;
+    reportLoad('decoding', Math.min(to - 0.001, cur), fileName);
+  }, 90);
+  return () => clearInterval(id);
+}
+
+/**
+ * Read → hash → decode → install (meta + peaks) for a user-provided file, publishing load
+ * progress throughout. Returns the content hash. The caller is responsible for clearing
+ * `audioLoading` (do it in a `finally` so a decode error can't leave a stuck bar).
+ */
+async function readDecodeInstall(file: File): Promise<string> {
+  reportLoad('reading', 0, file.name);
+  const buf = await readArrayBuffer(file, (frac) => reportLoad('reading', frac * READ_SHARE, file.name));
+  const hash = await hashArrayBuffer(buf);
+  reportLoad('decoding', READ_SHARE, file.name);
+  const stopCreep = startDecodeCreep(file.name, READ_SHARE, DECODE_CEIL);
+  let audioBuffer: AudioBuffer;
+  try {
+    audioBuffer = await transport.engine.decode(buf, formatLabel(file));
+  } finally {
+    stopCreep();
+  }
+  reportLoad('analyzing', DECODE_CEIL, file.name);
+  await installDecodedAudio(file, audioBuffer, hash);
+  return hash;
 }
 
 async function computePeaksIntoStore(): Promise<void> {
@@ -67,12 +125,13 @@ async function installDecodedAudio(
  * format-specific message on decode failure (spec §8.1).
  */
 export async function loadAudioFile(file: File): Promise<void> {
-  const buf = await file.arrayBuffer();
-  const hash = await hashArrayBuffer(buf);
-  // decode() throws AudioDecodeError on failure and installs the buffer on success.
-  const audioBuffer = await transport.engine.decode(buf, formatLabel(file));
-  await installDecodedAudio(file, audioBuffer, hash);
-  useStore.getState().zoomToFit();
+  try {
+    // readDecodeInstall throws AudioDecodeError on decode failure and installs on success.
+    await readDecodeInstall(file);
+    useStore.getState().zoomToFit();
+  } finally {
+    useStore.getState().setAudioLoading(null);
+  }
 }
 
 /**
@@ -84,12 +143,24 @@ export async function rehydrateAudio(meta: AudioMeta): Promise<boolean> {
   try {
     const blob = await getAudioBlob(meta.hash);
     if (!blob) return false;
+    // The blob is already local (IndexedDB), so there's no real read progress to show; jump
+    // straight into decode + analyze, which is where the time actually goes.
+    reportLoad('reading', 0, meta.fileName);
     const buf = await blob.arrayBuffer();
-    await transport.engine.decode(buf, meta.mimeType || meta.fileName);
+    reportLoad('decoding', READ_SHARE, meta.fileName);
+    const stopCreep = startDecodeCreep(meta.fileName, READ_SHARE, DECODE_CEIL);
+    try {
+      await transport.engine.decode(buf, meta.mimeType || meta.fileName);
+    } finally {
+      stopCreep();
+    }
+    reportLoad('analyzing', DECODE_CEIL, meta.fileName);
     await computePeaksIntoStore();
     return true;
   } catch {
     return false;
+  } finally {
+    useStore.getState().setAudioLoading(null);
   }
 }
 
@@ -103,11 +174,12 @@ export async function relinkAudioFile(
   file: File,
   expectedHash: string,
 ): Promise<{ matched: boolean }> {
-  const buf = await file.arrayBuffer();
-  const hash = await hashArrayBuffer(buf);
-  const audioBuffer = await transport.engine.decode(buf, formatLabel(file));
-  await installDecodedAudio(file, audioBuffer, hash);
-  return { matched: hash === expectedHash };
+  try {
+    const hash = await readDecodeInstall(file);
+    return { matched: hash === expectedHash };
+  } finally {
+    useStore.getState().setAudioLoading(null);
+  }
 }
 
 // ── project session orchestration ──────────────────────────────────────────────
@@ -117,6 +189,7 @@ export function clearAudioSession(): void {
   transport.stop();
   transport.engine.clear();
   useStore.getState().setPeaks(null);
+  useStore.getState().setAudioLoading(null);
 }
 
 /** Start a fresh project, clearing any stale decoded audio from the engine. */

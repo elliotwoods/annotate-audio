@@ -1,0 +1,50 @@
+/* Snap-target guide: a vertical line across the timeline (ruler → lanes), clipped to the
+   lane area exactly like the playhead, marking what a dragged edge is snapping to. */
+.snap-guide-clip {
+  position: absolute;
+  top: 0;
+  bottom: 12px; /* leave the hscroll visible (matches .playhead-clip) */
+  left: calc(var(--prep-w) + var(--gutter-w));
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 6; /* above the playhead so the guide + label stay readable */
+}
+
+.snap-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  will-change: transform;
+}
+
+/* Cue snap: a bright, solid magnet line — the high-value "aligned to another cue" cue. */
+.snap-guide--cue {
+  border-left: 1.5px solid var(--snap-cue);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--snap-cue) 60%, transparent);
+}
+
+/* Grid snap: subtler dashed line (the grid itself is already drawn underneath). */
+.snap-guide--grid {
+  border-left: 1px dashed var(--snap-grid);
+}
+
+.snap-guide__label {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--bg-0);
+}
+.snap-guide--cue .snap-guide__label {
+  background: var(--snap-cue);
+}
+.snap-guide--grid .snap-guide__label {
+  background: var(--snap-grid);
+  color: var(--text-0);
+}

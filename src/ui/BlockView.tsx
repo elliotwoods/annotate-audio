@@ -2,9 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import type { Block } from '../model/types';
 import { useView, useGrid, useSnap } from '../store/selectors';
 import { useStore, beginHistoryGroup, endHistoryGroup } from '../store/store';
-import { snapTime } from '../core/grid';
+import {
+  snapTimeWith,
+  snapMoveStart,
+  cueEdgeTimes,
+  type SnapContext,
+  type SnapResult,
+} from '../core/snap';
 import { timeToX } from '../core/transform';
-import { blockHeightForLabel, labelLineCount } from './metrics';
+import { clamp01 } from '../core/curve';
+import { blockHeightForLabel, blockHeightForBlock, labelLineCount } from './metrics';
+import { CurveEditor } from './CurveEditor';
+import { CueCurvePopover } from './CueCurvePopover';
 import './BlockView.css';
 
 export interface BlockViewProps {
@@ -29,6 +38,8 @@ interface DragState {
   origStart: number;
   origEnd: number;
   grouped: boolean;
+  /** Edge times of every OTHER cue, captured at gesture start, for cue-magnet snapping. */
+  cueTimes: number[];
 }
 
 export function BlockView({ block, color, selected, onEditHeight }: BlockViewProps): JSX.Element {
@@ -40,17 +51,31 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
   const moveBlock = useStore((s) => s.moveBlock);
   const resizeBlock = useStore((s) => s.resizeBlock);
   const setBlockLabel = useStore((s) => s.setBlockLabel);
+  const addCurvePoint = useStore((s) => s.addCurvePoint);
+  // Show the editing popover only when this cue is the sole selection (avoids popover spam
+  // while rubber-band/shift multi-selecting).
+  const soleSelected = useStore((s) => s.selection.length === 1 && s.selection[0] === block.id);
 
   const drag = useRef<DragState | null>(null);
   const [editing, setEditing] = useState(false);
+  // Which curve control point the shape buttons act on (a transient UI cursor).
+  const [selectedPoint, setSelectedPoint] = useState(0);
   const [draftLabel, setDraftLabel] = useState(block.label);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const liveRef = useRef({ view, grid, snap });
   liveRef.current = { view, grid, snap };
 
+  // Guards against a double-commit: tearing down the editor (Enter/Escape sets
+  // editing=false) unmounts the textarea, which fires a native blur → onBlur. The
+  // flag ensures only the first of {keydown, unmount-blur} takes effect, so Escape
+  // can't be undone by a trailing blur that saves the abandoned draft.
+  const settledRef = useRef(false);
+
   useEffect(() => {
     if (editing) {
+      settledRef.current = false;
       setDraftLabel(block.label);
       requestAnimationFrame(() => {
         inputRef.current?.focus();
@@ -67,13 +92,14 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
     return () => onEditHeight?.(0);
   }, [editing, draftLabel, onEditHeight]);
 
+  const isCurve = block.mode === 'curve' && !!block.curve && !block.isPoint;
+
   const left = timeToX(block.start, view);
   const rawWidth = (block.end - block.start) * view.pixelsPerSecond;
   const width = Math.max(MIN_WIDTH_PX, rawWidth);
-  const ownHeight = blockHeightForLabel(editing ? draftLabel : block.label);
-
-  const maybeSnap = (t: number, altKey: boolean): number =>
-    altKey ? t : snapTime(t, liveRef.current.grid, liveRef.current.snap);
+  const ownHeight = isCurve
+    ? blockHeightForBlock(block)
+    : blockHeightForLabel(editing ? draftLabel : block.label);
 
   const captureElRef = useRef<Element | null>(null);
 
@@ -83,21 +109,34 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
       if (!d) return;
       if (!d.grouped && Math.abs(e.clientX - d.startClientX) <= 2) return;
       if (!d.grouped) {
-        beginHistoryGroup();
+        beginHistoryGroup(d.kind === 'move' ? 'Move block' : 'Resize block');
         d.grouped = true;
       }
-      const pps = liveRef.current.view.pixelsPerSecond;
+      const { view, grid, snap } = liveRef.current;
+      const pps = view.pixelsPerSecond;
       const dxSec = (e.clientX - d.startClientX) / pps;
+      // Alt during a gesture bypasses snapping entirely (spec §12).
+      const ctx: SnapContext = { grid, snap, pixelsPerSecond: pps, cueTimes: d.cueTimes };
+      let r: SnapResult;
       if (d.kind === 'move') {
         // Horizontal move + optional vertical move to whichever cue/section lane the
-        // pointer is over (drag a cue between tracks).
-        const newStart = maybeSnap(d.origStart + dxSec, e.altKey);
-        moveBlock(d.id, newStart, rowIdUnderPointer(e.clientX, e.clientY));
+        // pointer is over (drag a cue between tracks). Either edge can magnet to a cue.
+        const rawStart = d.origStart + dxSec;
+        r = e.altKey
+          ? { value: rawStart, guide: null }
+          : snapMoveStart(rawStart, d.origEnd - d.origStart, ctx);
+        moveBlock(d.id, r.value, rowIdUnderPointer(e.clientX, e.clientY));
       } else if (d.kind === 'start') {
-        resizeBlock(d.id, 'start', maybeSnap(d.origStart + dxSec, e.altKey));
+        const raw = d.origStart + dxSec;
+        r = e.altKey ? { value: raw, guide: null } : snapTimeWith(raw, ctx);
+        resizeBlock(d.id, 'start', r.value);
       } else {
-        resizeBlock(d.id, 'end', maybeSnap(d.origEnd + dxSec, e.altKey));
+        const raw = d.origEnd + dxSec;
+        r = e.altKey ? { value: raw, guide: null } : snapTimeWith(raw, ctx);
+        resizeBlock(d.id, 'end', r.value);
       }
+      // Show a guide at whatever this edge snapped to (cleared on pointer up).
+      useStore.getState().setSnapIndicator(r.guide);
     },
     up(e: PointerEvent) {
       window.removeEventListener('pointermove', handlersRef.current.move);
@@ -109,6 +148,7 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
       const d = drag.current;
       drag.current = null;
       if (d?.grouped) endHistoryGroup();
+      useStore.getState().setSnapIndicator(null); // hide the guide when the gesture ends
     },
   });
 
@@ -125,6 +165,8 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
       origStart: block.start,
       origEnd: block.end,
       grouped: false,
+      // Snap targets = every other cue's edges, captured once at gesture start.
+      cueTimes: cueEdgeTimes(useStore.getState().core.blocks, block.id),
     };
     window.addEventListener('pointermove', handlersRef.current.move);
     window.addEventListener('pointerup', handlersRef.current.up);
@@ -141,17 +183,52 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
 
   const onDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (isCurve) {
+      // In curve mode, double-click adds a point (arbitrary curves only); never edits a label.
+      if (block.curve?.type === 'arbitrary') {
+        const rect = rootRef.current?.getBoundingClientRect();
+        if (rect && rect.width > 0 && rect.height > 0) {
+          const t = clamp01((e.clientX - rect.left) / rect.width);
+          const v = clamp01(1 - (e.clientY - rect.top) / rect.height);
+          addCurvePoint(block.id, t, v);
+        }
+      }
+      return;
+    }
     setEditing(true);
   };
 
+  // Blur and Enter both commit (save the draft); Escape cancels (revert).
   const commitLabel = () => {
+    if (settledRef.current) return;
+    settledRef.current = true;
     if (draftLabel !== block.label) setBlockLabel(block.id, draftLabel);
     setEditing(false);
   };
   const cancelLabel = () => {
+    if (settledRef.current) return;
+    settledRef.current = true;
     setDraftLabel(block.label);
     setEditing(false);
   };
+
+  // Keep the latest commit closure reachable from the document listener below.
+  const commitRef = useRef(commitLabel);
+  commitRef.current = commitLabel;
+
+  // Clicking anywhere outside this cue while editing ACCEPTS the edit. The textarea's
+  // onBlur alone isn't enough: clicking an empty lane calls preventDefault on its
+  // pointerdown, which suppresses the blur — so commit explicitly from a capture-phase
+  // document listener (settledRef dedupes against any blur that does fire).
+  useEffect(() => {
+    if (!editing) return;
+    const onPointerDownOutside = (e: PointerEvent) => {
+      const root = rootRef.current;
+      if (root && e.target instanceof Node && !root.contains(e.target)) commitRef.current();
+    };
+    document.addEventListener('pointerdown', onPointerDownOutside, true);
+    return () => document.removeEventListener('pointerdown', onPointerDownOutside, true);
+  }, [editing]);
 
   const labelEditor = editing ? (
     <textarea
@@ -179,72 +256,99 @@ export function BlockView({ block, color, selected, onEditHeight }: BlockViewPro
 
   if (block.isPoint) {
     return (
+      <>
+        <div
+          ref={rootRef}
+          className={`point-cue${selected ? ' selected' : ''}${editing ? ' editing' : ''}`}
+          style={{ left }}
+          onPointerDown={onBodyPointerDown}
+          onClick={onBodyClick}
+          onDoubleClick={onDoubleClick}
+          title={block.label || undefined}
+          role="button"
+          aria-label={block.label ? `Milestone ${block.label}` : 'Milestone'}
+        >
+          <span className="point-cue__diamond" style={{ background: color }} />
+          {/* Reveal-on-hover (mouse near the milestone) handle; CSS gates visibility. */}
+          {!editing && (
+            <span
+              className="point-cue__expand"
+              style={{ borderColor: color }}
+              onPointerDown={(e) => beginDrag('end', e)}
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              title="Drag right to give the milestone a duration"
+              aria-label="Expand milestone into a ranged cue"
+            />
+          )}
+          {editing ? (
+            <div className="point-cue__editor">{labelEditor}</div>
+          ) : block.label ? (
+            <span className="point-cue__label">{block.label}</span>
+          ) : null}
+        </div>
+        {soleSelected && (
+          <CueCurvePopover block={block} anchorRef={rootRef} selectedPoint={selectedPoint} />
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
       <div
-        className={`point-cue${selected ? ' selected' : ''}${editing ? ' editing' : ''}`}
-        style={{ left }}
+        ref={rootRef}
+        className={`block-view${selected ? ' selected' : ''}${editing ? ' editing' : ''}${isCurve ? ' curve' : ''}`}
+        style={{
+          left,
+          width,
+          height: ownHeight - 10,
+          background: hexWithAlpha(color, isCurve ? (selected ? 0.16 : 0.1) : selected ? 0.42 : 0.26),
+          borderColor: color,
+        }}
         onPointerDown={onBodyPointerDown}
         onClick={onBodyClick}
         onDoubleClick={onDoubleClick}
         title={block.label || undefined}
         role="button"
-        aria-label={block.label ? `Milestone ${block.label}` : 'Milestone'}
+        aria-label={block.label ? `Block ${block.label}` : 'Block'}
       >
-        <span className="point-cue__diamond" style={{ background: color }} />
-        {selected && !editing && (
+        {selected && (
           <span
-            className="point-cue__expand"
-            style={{ borderColor: color }}
+            className="block-view__handle block-view__handle--start"
+            onPointerDown={(e) => beginDrag('start', e)}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+          />
+        )}
+        {isCurve ? (
+          <CurveEditor
+            block={block}
+            color={color}
+            editable={selected}
+            width={width}
+            containerRef={rootRef}
+            selectedPoint={selectedPoint}
+            onSelectPoint={setSelectedPoint}
+          />
+        ) : editing ? (
+          labelEditor
+        ) : (
+          <span className="block-view__label">{block.label}</span>
+        )}
+        {selected && (
+          <span
+            className="block-view__handle block-view__handle--end"
             onPointerDown={(e) => beginDrag('end', e)}
             onClick={(e) => e.stopPropagation()}
             onDoubleClick={(e) => e.stopPropagation()}
-            title="Drag right to give the milestone a duration"
-            aria-label="Expand milestone into a ranged cue"
           />
         )}
-        {editing ? (
-          <div className="point-cue__editor">{labelEditor}</div>
-        ) : block.label ? (
-          <span className="point-cue__label">{block.label}</span>
-        ) : null}
       </div>
-    );
-  }
-
-  return (
-    <div
-      className={`block-view${selected ? ' selected' : ''}${editing ? ' editing' : ''}`}
-      style={{
-        left,
-        width,
-        height: ownHeight - 10,
-        background: hexWithAlpha(color, selected ? 0.42 : 0.26),
-        borderColor: color,
-      }}
-      onPointerDown={onBodyPointerDown}
-      onClick={onBodyClick}
-      onDoubleClick={onDoubleClick}
-      title={block.label || undefined}
-      role="button"
-      aria-label={block.label ? `Block ${block.label}` : 'Block'}
-    >
-      {selected && (
-        <span
-          className="block-view__handle block-view__handle--start"
-          onPointerDown={(e) => beginDrag('start', e)}
-          onClick={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => e.stopPropagation()}
-        />
+      {soleSelected && (
+        <CueCurvePopover block={block} anchorRef={rootRef} selectedPoint={selectedPoint} />
       )}
-      {editing ? labelEditor : <span className="block-view__label">{block.label}</span>}
-      {selected && (
-        <span
-          className="block-view__handle block-view__handle--end"
-          onPointerDown={(e) => beginDrag('end', e)}
-          onClick={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => e.stopPropagation()}
-        />
-      )}
-    </div>
+    </>
   );
 }
 

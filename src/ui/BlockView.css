@@ -23,6 +23,66 @@
   overflow: visible;
   z-index: 8;
 }
+/* Curve cues let the envelope/handles paint to the very edges (and points sit on the edge). */
+.block-view.curve {
+  overflow: visible;
+  align-items: stretch;
+}
+
+/* ── Curve envelope (SVG) + control points ───────────────────────────────────── */
+.curve-editor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* the block body underneath still handles select/move */
+}
+.curve-editor__svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.curve-editor__line {
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke; /* constant px width despite the non-uniform scale */
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.curve-editor__fill {
+  opacity: 0.14;
+}
+
+.curve-point {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  border: 2px solid;
+  border-radius: 50%;
+  background: var(--bg-0);
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  pointer-events: auto;
+  z-index: 6;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  transition: width 0.08s, height 0.08s;
+}
+.curve-point:hover {
+  width: 14px;
+  height: 14px;
+}
+.curve-point.selected {
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3);
+}
+.curve-point:active {
+  cursor: grabbing;
+}
+/* In curve mode the edge resize handles sit ABOVE the control points so the very-edge
+   strip still resizes the block (endpoint value is grabbed just outside the edge). */
+.block-view.curve .block-view__handle {
+  z-index: 7;
+}
 
 .block-view__label {
   flex: 1;
@@ -141,16 +201,26 @@
   width: 130px;
 }
 
-/* Drag-handle shown on a selected point cue to pull it out into a ranged block. */
+/* Drag-handle to pull a milestone out into a ranged block. Absolutely positioned just
+   right of the diamond (so it never shifts the label) and hidden until the pointer is
+   near the milestone — hovering anywhere over the point-cue reveals it. */
 .point-cue__expand {
+  position: absolute;
+  left: 7px;
+  top: 7px;
   width: 7px;
   height: 14px;
-  flex: none;
   border: 1px dashed;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.06);
   cursor: ew-resize;
-  opacity: 0.85;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+.point-cue:hover .point-cue__expand {
+  opacity: 0.9;
+  pointer-events: auto;
 }
 .point-cue__expand:hover {
   opacity: 1;

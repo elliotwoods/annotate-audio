@@ -69,7 +69,11 @@ check('verify rejects a wrong key', r.statusCode === 401,
 const project = {
   schemaVersion: 1, id: `__admincheck-${Date.now()}`, name: 'Admin Key Test',
   audio: null, grid: { bpm: 120, offset: 0, beatsPerBar: 4, beatUnit: 4 },
-  rows: [], blocks: [], view: { pixelsPerSecond: 100, scrollSec: 0, snap: 'bar', followPlayhead: false },
+  rows: [], blocks: [],
+  view: {
+    pixelsPerSecond: 100, scrollSec: 0, followPlayhead: false,
+    snap: { enabled: true, cues: true, grid: 'bar' },
+  },
   updatedAt: Date.now(),
 };
 r = await call(createProjects, { method: 'POST', headers: {}, query: {}, body: project });
