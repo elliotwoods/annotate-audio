@@ -1,0 +1,36 @@
+/* Peer-cursor overlay — mirrors .playhead-clip's lane-clipped positioning. */
+.peer-cursors-clip {
+  position: absolute;
+  top: 0;
+  bottom: 12px; /* leave the hscroll visible (matches .playhead-clip) */
+  left: calc(var(--prep-w) + var(--gutter-w));
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 6; /* just above the playhead */
+}
+
+.peer-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--peer, #7c5cff);
+  opacity: 0.85;
+  will-change: transform;
+}
+
+.peer-cursor__label {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: #fff;
+  background: var(--peer, #7c5cff);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}

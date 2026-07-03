@@ -32,7 +32,14 @@ import {
   type RealtimeMessage,
   type RealtimeStatus,
 } from '../persistence/realtime';
-import { canEdit, getProjectTokens, tokenFor } from '../auth/session';
+import { canEdit, getProjectTokens, tokenFor, currentUser } from '../auth/session';
+import { getPointerTime } from '../ui/pointerTime';
+import {
+  upsertPeerCursor,
+  removePeerCursor,
+  clearPeerCursors,
+  colorForId,
+} from '../ui/peerCursorStore';
 
 const SYNC_PLAYBACK_KEY = 'aa.syncPlayback';
 const DOC_DEBOUNCE_MS = 200;
@@ -67,6 +74,15 @@ interface SyncPayload {
   /** Only ever `true` — turning sync ON is the one transition that propagates. */
   on: boolean;
 }
+interface CursorPayload {
+  /** Timeline position in seconds, or null when the pointer leaves the timeline. */
+  posSec: number | null;
+  name: string;
+  color: string;
+}
+
+/** How often we sample + broadcast the local cursor (ms). Cheap, throttled. */
+const CURSOR_BROADCAST_MS = 60;
 
 // ── external "cloud status changed" signal ─────────────────────────────────────
 // Saving a new project to the cloud (or signing in) grants access without changing the
@@ -238,10 +254,18 @@ export function useCollab(projectId: string): CollabState {
           }
           break;
         }
+        case 'cursor': {
+          const c = msg.payload as CursorPayload;
+          if (c.posSec == null) removePeerCursor(msg.origin);
+          else upsertPeerCursor({ origin: msg.origin, posSec: c.posSec, name: c.name, color: c.color });
+          break;
+        }
         case 'presence': {
           const p = msg.payload as PresencePayload;
-          if (p.kind === 'bye') peers.delete(msg.origin);
-          else peers.set(msg.origin, Date.now());
+          if (p.kind === 'bye') {
+            peers.delete(msg.origin);
+            removePeerCursor(msg.origin);
+          } else peers.set(msg.origin, Date.now());
           refreshPeerCount();
           // A newcomer announced itself → reply with our presence, and (if we can edit) push
           // our current document so they converge past their stale snapshot baseline. Any
@@ -267,9 +291,29 @@ export function useCollab(projectId: string): CollabState {
       refreshPeerCount();
     }, HEARTBEAT_MS);
 
+    // ── outbound: live cursor (signed-in users only) ──────────────────────────
+    // Sample the hovered timeline time and broadcast it (throttled). Positions are in
+    // SECONDS (canonical) so each peer re-projects through their own zoom/scroll.
+    let lastCursor: number | null | undefined = undefined;
+    const cursorTimer = setInterval(() => {
+      if (channel.status !== 'open') return;
+      const u = currentUser();
+      if (!u) return; // only signed-in users share a cursor
+      const posSec = getPointerTime();
+      if (posSec === lastCursor) return; // unchanged since last tick
+      lastCursor = posSec;
+      channel.publish('cursor', {
+        posSec,
+        name: u.displayName || u.email || 'Someone',
+        color: colorForId(u.uid),
+      } satisfies CursorPayload);
+    }, CURSOR_BROADCAST_MS);
+
     return () => {
       if (docTimer) clearTimeout(docTimer);
       clearInterval(heartbeat);
+      clearInterval(cursorTimer);
+      clearPeerCursors();
       try {
         announce('bye');
       } catch {

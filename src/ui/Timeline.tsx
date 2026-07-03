@@ -12,6 +12,7 @@ import { TimeRulerCanvas } from './TimeRulerCanvas';
 import { WaveformCanvas } from './WaveformCanvas';
 import { Lanes } from './Lanes';
 import { Playhead } from './Playhead';
+import { PeerCursors } from './PeerCursors';
 import { SnapGuide } from './SnapGuide';
 import { useStore } from '../store/store';
 import { useView, useAudio, useContentDuration } from '../store/selectors';
@@ -239,6 +240,7 @@ export function Timeline() {
       />
 
       <Playhead />
+      <PeerCursors />
       <SnapGuide />
 
       {/* Two column dividers: prep|gutter at x=prepWidth, gutter|lane at x=prepWidth+gutterWidth. */}

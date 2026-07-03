@@ -11,6 +11,7 @@
 //   • 'playback' — opt-in transport (play/pause/seek) sync
 //   • 'presence' — join/leave + the join-time state handshake
 //   • 'sync'     — "enable sync playback" push: turning it on flips peers on (off never propagates)
+//   • 'cursor'   — ephemeral live cursor position (seconds) + identity of a signed-in peer
 //
 // Late joiners do NOT replay history (that would re-apply stale docs): the listener is filtered
 // to entries written after join, and convergence happens via the presence hello→doc handshake
@@ -46,7 +47,7 @@ import {
 import { firebaseConfig, hasRealtimeConfig } from '../auth/firebase';
 import { idToken } from '../auth/session';
 
-export type RealtimeTopic = 'doc' | 'playback' | 'presence' | 'sync';
+export type RealtimeTopic = 'doc' | 'playback' | 'presence' | 'sync' | 'cursor';
 export type RealtimeStatus = 'connecting' | 'open' | 'closed' | 'error';
 
 export interface RealtimeMessage<T = unknown> {
