@@ -16,6 +16,35 @@ import { writeMeta, type ProjectMeta } from './meta';
 import { safeEqual } from './tokens';
 import { adminAuth } from './firebaseAdmin';
 
+/** Bootstrap admins by email (comma-separated env override; defaults to Elliot). An admin is
+ *  always approved and can reach the admin panel. Beyond these, admin can be granted at runtime
+ *  via the Firebase custom claim `admin: true`. */
+export const ADMIN_EMAILS: string[] = (process.env.ADMIN_EMAILS ?? 'elliot@kimchiandchips.com')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+export interface Claims {
+  uid: string;
+  email: string | null;
+  admin: boolean;
+}
+
+/** Verify the caller's Firebase ID token and return uid + email + admin, or null. Never throws.
+ *  admin = bootstrap email OR a custom `admin:true` claim on the token. */
+export async function verifyClaims(req: NextRequest): Promise<Claims | null> {
+  const token = bearer(req);
+  if (!token) return null;
+  try {
+    const d = await adminAuth().verifyIdToken(token);
+    const email = (d.email as string | undefined) ?? null;
+    const admin = d.admin === true || (!!email && ADMIN_EMAILS.includes(email.toLowerCase()));
+    return { uid: d.uid, email, admin };
+  } catch {
+    return null;
+  }
+}
+
 /** Extract the bearer token (a Firebase ID token) from the Authorization header, if present. */
 export function bearer(req: NextRequest): string | null {
   const h = req.headers.get('authorization');

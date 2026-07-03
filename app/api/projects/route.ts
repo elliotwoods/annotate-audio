@@ -4,7 +4,8 @@
 //          view/edit tokens + writes meta.json and the first immutable snapshot.
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { verifyUid } from '@server/auth';
+import { verifyUid, verifyClaims } from '@server/auth';
+import { isApproved } from '@server/allowlist';
 import { makeToken } from '@server/tokens';
 import { readMeta, writeMeta, metaKey, snapshotKey, type ProjectMeta } from '@server/meta';
 import { getJSON, putJSON, listKeys } from '@server/storage';
@@ -31,8 +32,13 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const uid = await verifyUid(req);
-  if (!uid) return NextResponse.json({ error: 'Sign-in required.' }, { status: 401 });
+  const claims = await verifyClaims(req);
+  if (!claims) return NextResponse.json({ error: 'Sign-in required.' }, { status: 401 });
+  // Invite-only: only approved (or admin) accounts may create/own sets.
+  if (!(claims.admin || (await isApproved(claims.email)))) {
+    return NextResponse.json({ error: 'Your account is pending approval.' }, { status: 403 });
+  }
+  const uid = claims.uid;
   try {
     const body = await req.json().catch(() => null);
     if (sizeOf(body) > MAX_PROJECT_BYTES) {

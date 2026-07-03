@@ -35,6 +35,7 @@ import { TempoPopover } from './TempoPopover';
 import { ProjectMenu } from './ProjectMenu';
 import { HistoryMenu } from './HistoryMenu';
 import { LoginDialog } from './LoginDialog';
+import { AdminPanel } from './AdminPanel';
 import { ShareDialog } from './ShareDialog';
 import { SnapshotsDialog } from './SnapshotsDialog';
 import { SaveStateIndicator } from './SaveStateIndicator';
@@ -100,6 +101,7 @@ export function TopBar({
   // `cloudTick` bumps to recompute access after login or a publish mutates session state.
   const [cloudTick, setCloudTick] = useState(0);
   const [loginOpen, setLoginOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
 
@@ -464,6 +466,10 @@ export function TopBar({
       <LoginDialog
         open={loginOpen}
         onClose={() => setLoginOpen(false)}
+        onOpenAdmin={() => {
+          setLoginOpen(false);
+          setAdminOpen(true);
+        }}
         onChange={() => {
           // Signing in/out changes cloud access app-wide: refresh live collab, recompute this
           // bar's access memo (via the subscription above), and let App re-gate the editor.
@@ -471,6 +477,7 @@ export function TopBar({
           refreshCollab();
         }}
       />
+      <AdminPanel open={adminOpen} onClose={() => setAdminOpen(false)} />
       <ShareDialog open={shareOpen} projectId={projectId} onClose={() => setShareOpen(false)} />
       <SnapshotsDialog
         open={snapshotsOpen}

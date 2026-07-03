@@ -17,6 +17,8 @@ import { openCloudProject } from './persistence/cloudSync';
 import { isVerified, rememberTokens } from './auth/session';
 import { hasFirebaseConfig } from './auth/firebase';
 import { onCloudChanged } from './auth/cloudSignal';
+import { refreshMe, subscribeMe, getMe } from './auth/me';
+import { AccessPending } from './ui/AccessPending';
 import { ensureShareableUrl } from './auth/shareUrl';
 
 /** Parse a shared-link request from the URL: ?p=<id>&v=<viewToken>&e=<editToken>. */
@@ -38,6 +40,13 @@ export default function App() {
   // When Firebase isn't configured at all, there's no cloud to sign in to — fall through to the
   // offline, local-only editor rather than a dead-end gate.
   const [authed, setAuthed] = useState(() => !hasFirebaseConfig() || isVerified() || !!bootLink);
+  // Invite-only access status (approval + admin), fetched from /api/me. `me.signedIn` is only
+  // true once the server has answered, so we never flash the pending screen before we know.
+  const [me, setMe] = useState(getMe);
+  useEffect(() => subscribeMe(() => setMe(getMe())), []);
+  useEffect(() => {
+    if (isVerified()) void refreshMe();
+  }, [authed]);
   useKeyboard();
 
   // Live collaboration for the current (cloud) project. Mounted unconditionally to keep hook
@@ -138,6 +147,12 @@ export default function App() {
 
   if (!authed && !bootLink) {
     return <SignInGate onSignedIn={() => setAuthed(true)} />;
+  }
+
+  // Signed in but not on the invite allowlist (and not opening a share link): they can view
+  // shared sets by link, but not create/own here until an admin approves them.
+  if (!bootLink && me.signedIn && !me.approved) {
+    return <AccessPending email={me.email ?? null} />;
   }
 
   return (
