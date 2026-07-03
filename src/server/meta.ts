@@ -10,9 +10,13 @@ export interface ProjectMeta {
   /** Firebase uid of the user who created (owns) this set. The library lists only your own
    *  sets, and the owner has full view/edit/delete without needing a share token. */
   ownerUid: string;
+  /** Firebase uids granted persistent edit access by accepting an edit invite (opening an
+   *  edit link while signed in). Absent on legacy metas ⇒ treat as []. */
+  editors?: string[];
   /** Content hash of the audio referenced by the latest snapshot (or null). */
   audioHash: string | null;
-  /** Per-project capability secrets shared via private links. */
+  /** Per-project capability secrets shared via private links. The edit token acts as an
+   *  INVITE: an anonymous holder gets view-only; a signed-in holder becomes an editor. */
   viewToken: string;
   editToken: string;
   /** Key of the most recent snapshot object, e.g. "1718000000000-ab12cd". */

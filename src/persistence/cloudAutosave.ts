@@ -12,15 +12,16 @@
 
 import { useStore } from '../store/store';
 import { saveCurrentToCloud } from './cloudSync';
-import { getProjectTokens } from '../auth/session';
+import { canEdit } from '../auth/session';
 
 const CLOUD_DEBOUNCE_MS = 10_000;
 
-/** True when the current project is an online cloud set this device may edit. */
+/** True when the current project is an online cloud set this device may edit. Requires
+ *  sign-in (edit is now login-gated) as well as the edit token. */
 function canAutoCloudSave(): boolean {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
   const id = useStore.getState().core.id;
-  return !!getProjectTokens(id).edit;
+  return canEdit(id);
 }
 
 export function startCloudAutosave(): () => void {

@@ -81,7 +81,9 @@ export function ProjectMenu({
     const verified = isVerified();
     const tokens = getProjectTokens(projectId);
     const isCloud = !!(tokens.view || tokens.edit);
-    const editable = verified || !!tokens.edit;
+    // Editing requires sign-in: a cloud set needs login + the edit token; a still-local draft
+    // is editable by the signed-in author.
+    const editable = isCloud ? verified && !!tokens.edit : verified;
     return { verified, isCloud, editable, viewOnly: isCloud && !editable };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tick]);

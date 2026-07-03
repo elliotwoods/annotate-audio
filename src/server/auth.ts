@@ -7,9 +7,12 @@
 //     new sets (becoming their owner).
 //   • Per-project token — `?token=<secret>` query param, matched against the project's
 //     viewToken/editToken in meta.json. Lets people without an account open a shared link.
+//     The VIEW token grants read-only access to anyone. The EDIT token is an INVITE: an
+//     anonymous holder gets view-only; a SIGNED-IN holder is granted edit and (on the write
+//     paths) added to meta.editors so they keep edit access without the link.
 
 import type { NextRequest } from 'next/server';
-import type { ProjectMeta } from './meta';
+import { writeMeta, type ProjectMeta } from './meta';
 import { safeEqual } from './tokens';
 import { adminAuth } from './firebaseAdmin';
 
@@ -43,14 +46,49 @@ export function queryToken(req: NextRequest): string | null {
 
 export type Access = 'owner' | 'edit' | 'view' | null;
 
-/** Resolve the caller's access level for a given project meta. */
-export async function accessLevel(req: NextRequest, meta: ProjectMeta): Promise<Access> {
-  const uid = await verifyUid(req);
+/** Pure access computation from an already-resolved uid + share token. The edit token is an
+ *  INVITE: it only grants edit to a SIGNED-IN caller (uid present); an anonymous edit-token
+ *  holder is downgraded to view (they must sign in to edit). A uid already in `editors`
+ *  (invite previously accepted) keeps edit without needing the token. */
+export function computeAccess(uid: string | null, token: string | null, meta: ProjectMeta): Access {
   if (uid && uid === meta.ownerUid) return 'owner';
-  const token = queryToken(req);
-  if (safeEqual(token, meta.editToken)) return 'edit';
+  if (uid && (meta.editors ?? []).includes(uid)) return 'edit';
+  if (safeEqual(token, meta.editToken)) return uid ? 'edit' : 'view';
   if (safeEqual(token, meta.viewToken)) return 'view';
   return null;
+}
+
+/** Resolve access AND the caller's uid in one pass (one ID-token verification). */
+export async function resolveAccess(
+  req: NextRequest,
+  meta: ProjectMeta,
+): Promise<{ access: Access; uid: string | null }> {
+  const uid = await verifyUid(req);
+  return { access: computeAccess(uid, queryToken(req), meta), uid };
+}
+
+/** Resolve the caller's access level for a given project meta. */
+export async function accessLevel(req: NextRequest, meta: ProjectMeta): Promise<Access> {
+  return (await resolveAccess(req, meta)).access;
+}
+
+/**
+ * If the caller authenticated via the edit token but isn't yet a persistent editor, add their
+ * uid to `meta.editors` and persist it — turning the edit INVITE into lasting membership. Safe
+ * to call after any access check; returns the (possibly updated) meta. No-op for owners,
+ * existing editors, view-only, and anonymous callers.
+ */
+export async function acceptInviteIfEligible(
+  req: NextRequest,
+  meta: ProjectMeta,
+): Promise<ProjectMeta> {
+  const { access, uid } = await resolveAccess(req, meta);
+  if (access !== 'edit' || !uid || uid === meta.ownerUid) return meta;
+  const editors = meta.editors ?? [];
+  if (editors.includes(uid)) return meta;
+  const updated: ProjectMeta = { ...meta, editors: [...editors, uid] };
+  await writeMeta(updated);
+  return updated;
 }
 
 export function canView(access: Access): boolean {

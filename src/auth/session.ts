@@ -137,8 +137,10 @@ export function accessFor(id: string): Access {
   return null;
 }
 
+/** Cloud edit rights: you must be SIGNED IN and hold the edit token. An edit link opened
+ *  while signed out is view-only until you log in (the token is an invite, not a key). */
 export function canEdit(id: string): boolean {
-  return !!getProjectTokens(id).edit;
+  return isVerified() && !!getProjectTokens(id).edit;
 }
 
 /** The token to send on per-project API calls (prefer edit), or null if none held. */

@@ -64,6 +64,17 @@
   border: 1px solid var(--line);
 }
 
+/* Actionable variant (e.g. "Sign in to edit" on an edit invite) — reads as a button. */
+button.topbar-pill--action {
+  cursor: pointer;
+  color: var(--bg-0, #0b0b0d);
+  background: var(--accent, #7c5cff);
+  border-color: transparent;
+}
+button.topbar-pill--action:hover {
+  filter: brightness(1.08);
+}
+
 .topbar-cloud-msg {
   flex: 0 0 auto;
   font-size: 12px;

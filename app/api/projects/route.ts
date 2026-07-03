@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
       id: project.id,
       name: project.name,
       ownerUid: uid,
+      editors: [],
       audioHash: audioHashOf(project),
       viewToken: makeToken(),
       editToken: makeToken(),

@@ -3,7 +3,7 @@
 // latest). `meta` is the public-safe subset (no tokens unless the caller is admin/edit).
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { accessLevel, canView, canEdit } from '@server/auth';
+import { resolveAccess, acceptInviteIfEligible, canView, canEdit } from '@server/auth';
 import { readMeta, snapshotKey, type ProjectMeta } from '@server/meta';
 import { getJSON } from '@server/storage';
 
@@ -13,13 +13,16 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const id = params.id;
   try {
-    const meta = await readMeta(id);
+    let meta = await readMeta(id);
     if (!meta) return NextResponse.json({ error: 'Project not found.' }, { status: 404 });
 
-    const access = await accessLevel(req, meta);
+    const { access } = await resolveAccess(req, meta);
     if (!canView(access)) {
       return NextResponse.json({ error: 'Not authorized for this project.' }, { status: 401 });
     }
+
+    // Opening an edit link while signed in accepts the invite → persistent editor membership.
+    meta = await acceptInviteIfEligible(req, meta);
 
     const snapParam = req.nextUrl.searchParams.get('snapshot');
     const snapId = snapParam || meta.latest;

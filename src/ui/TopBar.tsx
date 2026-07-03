@@ -107,8 +107,12 @@ export function TopBar({
     const verified = isVerified();
     const tokens = getProjectTokens(projectId);
     const isCloud = !!(tokens.view || tokens.edit);
-    const editable = verified || !!tokens.edit; // admin edits any set; edit-token holders too
-    return { verified, isCloud, editable, viewOnly: isCloud && !editable };
+    // Editing requires sign-in: a cloud set needs login + the edit token (owners/invited
+    // editors); a still-local draft is editable by the signed-in author.
+    const editable = isCloud ? verified && !!tokens.edit : verified;
+    // Holds an edit invite but isn't signed in yet → can unlock editing by signing in.
+    const invited = isCloud && !editable && !!tokens.edit && !verified;
+    return { verified, isCloud, editable, invited, viewOnly: isCloud && !editable };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, cloudTick]);
 
@@ -389,10 +393,21 @@ export function TopBar({
           </span>
         )}
 
-        {cloud.viewOnly && (
+        {cloud.viewOnly && !cloud.invited && (
           <span className="topbar-pill" title="Opened from a view-only link">
             View-only
           </span>
+        )}
+
+        {cloud.invited && (
+          <button
+            type="button"
+            className="topbar-pill topbar-pill--action"
+            onClick={() => setLoginOpen(true)}
+            title="This is an edit invite — sign in to edit this set"
+          >
+            Sign in to edit
+          </button>
         )}
 
         {cloud.isCloud && (

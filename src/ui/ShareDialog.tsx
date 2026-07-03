@@ -67,8 +67,8 @@ export function ShareDialog({
             )}
             {tokens.edit && (
               <LinkRow
-                title="Edit link"
-                hint="Recipients can open and save new snapshots, live."
+                title="Edit link (invite)"
+                hint="Recipients open read-only, then sign in to edit — they become a saved editor."
                 url={shareUrl(projectId, 'e', tokens.edit)}
                 copied={copied === 'edit'}
                 onCopy={(u) => void copy('edit', u)}
