@@ -7,9 +7,9 @@
 // returns a short-lived presigned PUT URL.
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { isAdmin, accessLevel, canEdit } from '@server/auth';
+import { accessLevel, canEdit } from '@server/auth';
 import { readMeta } from '@server/meta';
-import { objectExists, presignPut } from '@server/r2';
+import { objectExists, presignPut } from '@server/storage';
 import { audioKey, isValidHash } from '@server/audio';
 
 export const runtime = 'nodejs';
@@ -27,13 +27,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    if (!isAdmin(req)) {
-      if (!projectId) return NextResponse.json({ error: 'projectId required.' }, { status: 400 });
-      const meta = await readMeta(projectId);
-      if (!meta) return NextResponse.json({ error: 'Project not found.' }, { status: 404 });
-      if (!canEdit(accessLevel(req, meta))) {
-        return NextResponse.json({ error: 'Edit access required.' }, { status: 401 });
-      }
+    if (!projectId) return NextResponse.json({ error: 'projectId required.' }, { status: 400 });
+    const meta = await readMeta(projectId);
+    if (!meta) return NextResponse.json({ error: 'Project not found.' }, { status: 404 });
+    if (!canEdit(await accessLevel(req, meta))) {
+      return NextResponse.json({ error: 'Edit access required.' }, { status: 401 });
     }
 
     const key = audioKey(hash);

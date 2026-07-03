@@ -15,6 +15,7 @@ import { listProjects } from './persistence/db';
 import { loadProjectWithAudio } from './audio/audioFile';
 import { openCloudProject } from './persistence/cloudSync';
 import { isVerified, rememberTokens } from './auth/session';
+import { hasFirebaseConfig } from './auth/firebase';
 import { onCloudChanged } from './auth/cloudSignal';
 import { ensureShareableUrl } from './auth/shareUrl';
 
@@ -34,7 +35,9 @@ export default function App() {
   const [bootLink] = useState(readShareLink);
   // A bare base-URL visitor must sign in before they get an editor or can create a set; a
   // share-link recipient bypasses the gate entirely (their token is the session credential).
-  const [authed, setAuthed] = useState(() => isVerified() || !!bootLink);
+  // When Firebase isn't configured at all, there's no cloud to sign in to — fall through to the
+  // offline, local-only editor rather than a dead-end gate.
+  const [authed, setAuthed] = useState(() => !hasFirebaseConfig() || isVerified() || !!bootLink);
   useKeyboard();
 
   // Live collaboration for the current (cloud) project. Mounted unconditionally to keep hook
@@ -57,7 +60,10 @@ export default function App() {
 
   // Re-derive auth when cloud access changes (e.g. signing out via the TopBar drops the editor
   // back to the gate; signing in / publishing keeps it).
-  useEffect(() => onCloudChanged(() => setAuthed(isVerified() || !!bootLink)), [bootLink]);
+  useEffect(
+    () => onCloudChanged(() => setAuthed(!hasFirebaseConfig() || isVerified() || !!bootLink)),
+    [bootLink],
+  );
 
   // Autosave for an active session (local IndexedDB + automatic cloud snapshots).
   useEffect(() => {

@@ -3,9 +3,9 @@
 // The browser then fetches the blob directly from R2 and caches it locally by hash.
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { isAdmin, accessLevel, canView } from '@server/auth';
+import { accessLevel, canView } from '@server/auth';
 import { readMeta } from '@server/meta';
-import { objectExists, presignGet } from '@server/r2';
+import { objectExists, presignGet } from '@server/storage';
 import { audioKey, isValidHash } from '@server/audio';
 
 export const runtime = 'nodejs';
@@ -16,14 +16,12 @@ export async function GET(req: NextRequest, { params }: { params: { hash: string
   if (!isValidHash(hash)) return NextResponse.json({ error: 'Invalid audio hash.' }, { status: 400 });
 
   try {
-    if (!isAdmin(req)) {
-      const projectId = req.nextUrl.searchParams.get('p') || '';
-      if (!projectId) return NextResponse.json({ error: 'project (p) required.' }, { status: 400 });
-      const meta = await readMeta(projectId);
-      if (!meta) return NextResponse.json({ error: 'Project not found.' }, { status: 404 });
-      if (!canView(accessLevel(req, meta))) {
-        return NextResponse.json({ error: 'Not authorized.' }, { status: 401 });
-      }
+    const projectId = req.nextUrl.searchParams.get('p') || '';
+    if (!projectId) return NextResponse.json({ error: 'project (p) required.' }, { status: 400 });
+    const meta = await readMeta(projectId);
+    if (!meta) return NextResponse.json({ error: 'Project not found.' }, { status: 404 });
+    if (!canView(await accessLevel(req, meta))) {
+      return NextResponse.json({ error: 'Not authorized.' }, { status: 401 });
     }
 
     const key = audioKey(hash);

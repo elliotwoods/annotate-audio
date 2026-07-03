@@ -1,0 +1,18 @@
+{
+  "rules": {
+    "channels": {
+      "$pid": {
+        "// note": "Clients authenticate to RTDB with a per-project Firebase custom token minted by /api/realtime/token, carrying claims { pid, canEdit }. The channel is a single ephemeral broadcast log: each entry is a {topic, origin, ts, payload} envelope, delivered once to connected peers and then removed. canEdit gates publishing edits (doc/playback/sync); view-only holders may still publish 'presence' so the live-peers indicator works (mirrors the old Ably publish-vs-subscribe split).",
+
+        ".read": "auth != null && auth.token.pid === $pid",
+
+        "log": {
+          "$msgId": {
+            ".write": "auth != null && auth.token.pid === $pid && (!newData.exists() || auth.token.canEdit === true || newData.child('topic').val() === 'presence')",
+            ".validate": "newData.hasChildren(['topic', 'origin', 'ts', 'payload'])"
+          }
+        }
+      }
+    }
+  }
+}

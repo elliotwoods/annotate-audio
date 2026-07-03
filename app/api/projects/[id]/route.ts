@@ -5,7 +5,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { accessLevel, canView, canEdit } from '@server/auth';
 import { readMeta, snapshotKey, type ProjectMeta } from '@server/meta';
-import { getJSON } from '@server/r2';
+import { getJSON } from '@server/storage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,7 +16,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const meta = await readMeta(id);
     if (!meta) return NextResponse.json({ error: 'Project not found.' }, { status: 404 });
 
-    const access = accessLevel(req, meta);
+    const access = await accessLevel(req, meta);
     if (!canView(access)) {
       return NextResponse.json({ error: 'Not authorized for this project.' }, { status: 401 });
     }

@@ -1,16 +1,27 @@
-// Client-side auth/session state, persisted in localStorage.
+// Client-side auth/session state.
 //
-//   • Admin key — the verified-user secret. Pasted once; kept indefinitely so the user
-//     stays "logged in". Sent to the API as a bearer token.
-//   • Per-project tokens — view/edit secrets gathered from share links (or returned when
-//     the verified user creates/opens a set). Let returning users keep their access.
+//   • User identity — a Firebase Authentication user (Google sign-in). Signing in lets you
+//     create and OWN cloud sets; your ID token authorizes the API as the set's owner. Firebase
+//     persists the session across reloads, so you stay signed in.
+//   • Per-project tokens — view/edit secrets gathered from share links (or echoed back when you
+//     create/open a set you own). They let people without an account keep their link access.
 //
-// This module is pure storage + derivation; all network calls live in persistence/cloud.ts.
+// This module is identity + per-project token storage; all network calls live in
+// persistence/cloud.ts, and the realtime custom-token sign-in lives in persistence/realtime.ts.
 
-const ADMIN_KEY = 'aa.adminKey';
+import {
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged,
+  type User,
+} from 'firebase/auth';
+import { firebaseAuth, hasFirebaseConfig } from './firebase';
+import { emitCloudChanged } from './cloudSignal';
+
 const TOKENS_KEY = 'aa.tokens';
 
-export type Access = 'admin' | 'edit' | 'view' | null;
+export type Access = 'owner' | 'edit' | 'view' | null;
 
 export interface ProjectTokens {
   view?: string;
@@ -19,34 +30,58 @@ export interface ProjectTokens {
 
 type TokenMap = Record<string, ProjectTokens>;
 
-// ── admin key ────────────────────────────────────────────────────────────────
+// ── Firebase user identity ─────────────────────────────────────────────────────
 
-export function getAdminKey(): string | null {
+let current: User | null = null;
+let wired = false;
+
+/** Begin tracking auth state (idempotent). Restores a persisted session asynchronously and
+ *  fires emitCloudChanged() when it resolves so cloud-gated UI re-evaluates isVerified(). */
+function ensureWired(): void {
+  if (wired || typeof window === 'undefined' || !hasFirebaseConfig()) return;
+  wired = true;
+  onAuthStateChanged(firebaseAuth(), (u) => {
+    current = u;
+    emitCloudChanged();
+  });
+}
+
+export function currentUser(): User | null {
+  ensureWired();
+  return current;
+}
+
+/** True when a user is signed in (can create + own cloud sets). */
+export function isVerified(): boolean {
+  return !!currentUser();
+}
+
+/** The signed-in user's Firebase ID token (for `Authorization: Bearer …`), or null. */
+export async function idToken(): Promise<string | null> {
+  const u = currentUser();
+  if (!u) return null;
   try {
-    return localStorage.getItem(ADMIN_KEY);
+    return await u.getIdToken();
   } catch {
     return null;
   }
 }
 
-export function setAdminKey(key: string): void {
-  try {
-    localStorage.setItem(ADMIN_KEY, key);
-  } catch {
-    /* storage unavailable — verified state simply won't persist */
-  }
+export async function signInWithGoogle(): Promise<void> {
+  ensureWired();
+  await signInWithPopup(firebaseAuth(), new GoogleAuthProvider());
+  emitCloudChanged();
 }
 
-export function clearAdminKey(): void {
-  try {
-    localStorage.removeItem(ADMIN_KEY);
-  } catch {
-    /* ignore */
-  }
+export async function signOutUser(): Promise<void> {
+  await signOut(firebaseAuth());
+  emitCloudChanged();
 }
 
-export function isVerified(): boolean {
-  return !!getAdminKey();
+/** Subscribe to sign-in/out changes. Returns an unsubscribe. */
+export function onAuthChange(cb: (user: User | null) => void): () => void {
+  ensureWired();
+  return onAuthStateChanged(firebaseAuth(), cb);
 }
 
 // ── per-project tokens ───────────────────────────────────────────────────────
@@ -92,9 +127,10 @@ export function forgetTokens(id: string): void {
 
 // ── derived access ─────────────────────────────────────────────────────────────
 
-/** The caller's effective access to a project: admin > edit > view > null. */
+/** The caller's effective access to a project from the tokens held locally. Ownership is
+ *  resolved server-side from the ID token; in practice an owner holds the edit token after
+ *  create/open (the API echoes it back), so token presence is the right client-side signal. */
 export function accessFor(id: string): Access {
-  if (isVerified()) return 'admin';
   const t = getProjectTokens(id);
   if (t.edit) return 'edit';
   if (t.view) return 'view';
@@ -102,11 +138,10 @@ export function accessFor(id: string): Access {
 }
 
 export function canEdit(id: string): boolean {
-  const a = accessFor(id);
-  return a === 'admin' || a === 'edit';
+  return !!getProjectTokens(id).edit;
 }
 
-/** The token to send on per-project API calls (prefer edit), or null if admin/none. */
+/** The token to send on per-project API calls (prefer edit), or null if none held. */
 export function tokenFor(id: string): string | null {
   const t = getProjectTokens(id);
   return t.edit ?? t.view ?? null;

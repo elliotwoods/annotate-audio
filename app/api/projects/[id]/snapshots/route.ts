@@ -13,7 +13,7 @@ import {
   snapIdFromKey,
   snapTimestamp,
 } from '@server/meta';
-import { putJSON, listKeys } from '@server/r2';
+import { putJSON, listKeys } from '@server/storage';
 import { parseProject, audioHashOf, MAX_PROJECT_BYTES } from '@server/project';
 import { newSnapId } from '@server/snapId';
 
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   try {
     const meta = await readMeta(id);
     if (!meta) return NextResponse.json({ error: 'Project not found.' }, { status: 404 });
-    if (!canView(accessLevel(req, meta))) {
+    if (!canView(await accessLevel(req, meta))) {
       return NextResponse.json({ error: 'Not authorized.' }, { status: 401 });
     }
     const keys = await listKeys(snapshotPrefix(id));
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try {
     const meta = await readMeta(id);
     if (!meta) return NextResponse.json({ error: 'Project not found.' }, { status: 404 });
-    if (!canEdit(accessLevel(req, meta))) {
+    if (!canEdit(await accessLevel(req, meta))) {
       return NextResponse.json({ error: 'Edit access required.' }, { status: 401 });
     }
     const body = await req.json().catch(() => null);

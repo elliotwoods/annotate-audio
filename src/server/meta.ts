@@ -2,11 +2,14 @@
 // projects/{id}/meta.json. Snapshots themselves are immutable; this small record is the
 // only thing rewritten on each save (to advance the `latest` pointer + timestamps).
 
-import { getJSON, putJSON } from './r2';
+import { getJSON, putJSON } from './storage';
 
 export interface ProjectMeta {
   id: string;
   name: string;
+  /** Firebase uid of the user who created (owns) this set. The library lists only your own
+   *  sets, and the owner has full view/edit/delete without needing a share token. */
+  ownerUid: string;
   /** Content hash of the audio referenced by the latest snapshot (or null). */
   audioHash: string | null;
   /** Per-project capability secrets shared via private links. */

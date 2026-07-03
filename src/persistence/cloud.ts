@@ -8,7 +8,8 @@
 import type { Project } from '../model/types';
 import { validateProject } from './json';
 import {
-  getAdminKey,
+  idToken,
+  isVerified,
   getProjectTokens,
   rememberTokens,
   tokenFor,
@@ -49,14 +50,15 @@ export interface CreateResult {
 
 // ── low-level fetch ──────────────────────────────────────────────────────────
 
-function adminHeaders(extra?: Record<string, string>): Record<string, string> {
-  const key = getAdminKey();
-  return { ...(key ? { Authorization: `Bearer ${key}` } : {}), ...extra };
+/** Build request headers carrying the signed-in user's Firebase ID token (if any). */
+async function authHeaders(extra?: Record<string, string>): Promise<Record<string, string>> {
+  const token = await idToken();
+  return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra };
 }
 
-/** Append `?token=` for the given project when the caller isn't admin. */
+/** Append `?token=` (the per-project share secret) when we hold one. Harmless alongside an
+ *  owner's ID token — the server prefers ownership and falls back to the token. */
 function withToken(path: string, id: string): string {
-  if (getAdminKey()) return path;
   const token = tokenFor(id);
   if (!token) return path;
   const sep = path.includes('?') ? '&' : '?';
@@ -87,37 +89,21 @@ export class CloudError extends Error {
   }
 }
 
-// ── auth ─────────────────────────────────────────────────────────────────────
-
-/** Verify an admin key against the server (login). Returns true if accepted. */
-export async function verifyKey(key: string): Promise<boolean> {
-  try {
-    await apiJSON('/api/auth/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key }),
-    });
-    return true;
-  } catch (err) {
-    if (err instanceof CloudError && err.status === 401) return false;
-    throw err;
-  }
-}
-
 // ── projects ───────────────────────────────────────────────────────────────────
 
-/** Verified-user library: all cloud sets. */
-export function listCloudProjects(): Promise<CloudProjectSummary[]> {
-  return apiJSON<{ projects: CloudProjectSummary[] }>('/api/projects', {
-    headers: adminHeaders(),
-  }).then((r) => r.projects);
+/** Signed-in user's library: the cloud sets you own. */
+export async function listCloudProjects(): Promise<CloudProjectSummary[]> {
+  const r = await apiJSON<{ projects: CloudProjectSummary[] }>('/api/projects', {
+    headers: await authHeaders(),
+  });
+  return r.projects;
 }
 
-/** Create a new cloud set (verified users only). Persists the returned tokens. */
+/** Create a new cloud set (signed-in users only). Persists the returned tokens. */
 export async function createCloudProject(project: Project): Promise<CreateResult> {
   const result = await apiJSON<CreateResult>('/api/projects', {
     method: 'POST',
-    headers: adminHeaders({ 'Content-Type': 'application/json' }),
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(project),
   });
   rememberTokens(result.id, { view: result.viewToken, edit: result.editToken });
@@ -133,7 +119,7 @@ export async function loadCloudProject(
   if (opts?.snapshot) path += `?snapshot=${encodeURIComponent(opts.snapshot)}`;
   const data = await apiJSON<{ meta: CloudMeta; snapshot: string; project: unknown }>(
     withToken(path, id),
-    { headers: adminHeaders() },
+    { headers: await authHeaders() },
   );
   // Edit links/admin get tokens echoed back — persist them so the user keeps access.
   if (data.meta.viewToken || data.meta.editToken) {
@@ -152,7 +138,7 @@ export async function recoverProjectTokens(id: string): Promise<ProjectTokens> {
   try {
     const data = await apiJSON<{ meta: CloudMeta }>(
       withToken(`/api/projects/${encodeURIComponent(id)}`, id),
-      { headers: adminHeaders() },
+      { headers: await authHeaders() },
     );
     if (data.meta.viewToken || data.meta.editToken) {
       rememberTokens(id, { view: data.meta.viewToken, edit: data.meta.editToken });
@@ -163,20 +149,22 @@ export async function recoverProjectTokens(id: string): Promise<ProjectTokens> {
   return getProjectTokens(id);
 }
 
-export function listSnapshots(id: string): Promise<{ snapshots: SnapshotInfo[]; latest: string | null }> {
+export async function listSnapshots(
+  id: string,
+): Promise<{ snapshots: SnapshotInfo[]; latest: string | null }> {
   return apiJSON(withToken(`/api/projects/${encodeURIComponent(id)}/snapshots`, id), {
-    headers: adminHeaders(),
+    headers: await authHeaders(),
   });
 }
 
 /** Save a NEW immutable snapshot (edit access). Never overwrites prior saves. */
-export function saveSnapshot(
+export async function saveSnapshot(
   id: string,
   project: Project,
 ): Promise<{ snapshotId: string; createdAt: number }> {
   return apiJSON(withToken(`/api/projects/${encodeURIComponent(id)}/snapshots`, id), {
     method: 'POST',
-    headers: adminHeaders({ 'Content-Type': 'application/json' }),
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(project),
   });
 }
@@ -193,7 +181,7 @@ export async function ensureAudioUploaded(
     withToken('/api/audio/upload-url', projectId),
     {
       method: 'POST',
-      headers: adminHeaders({ 'Content-Type': 'application/json' }),
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ projectId, hash, contentType: blob.type || 'application/octet-stream' }),
     },
   );
@@ -227,7 +215,7 @@ export async function fetchAudioBlob(projectId: string, hash: string): Promise<B
   path += `${sep}p=${encodeURIComponent(projectId)}`;
   try {
     const { url } = await apiJSON<{ url: string }>(withToken(path, projectId), {
-      headers: adminHeaders(),
+      headers: await authHeaders(),
     });
     let res: Response;
     try {
@@ -252,7 +240,7 @@ export async function fetchAudioBlob(projectId: string, hash: string): Promise<B
 
 /** Whether the user currently holds any access to this project (admin or stored token). */
 export function hasCloudAccess(id: string): boolean {
-  if (getAdminKey()) return true;
+  if (isVerified()) return true;
   const t = getProjectTokens(id);
   return !!(t.view || t.edit);
 }

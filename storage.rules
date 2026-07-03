@@ -1,0 +1,17 @@
+rules_version = '2';
+
+// All reads and writes to Cloud Storage are mediated server-side by the Next.js route
+// handlers (app/api/**), which use the Admin SDK (firebase-admin) — that runs with
+// privileged credentials and BYPASSES these rules entirely. The browser only ever touches
+// Storage through short-lived V4 signed URLs minted by those handlers after an access check
+// (owner via Firebase ID token, or a per-project view/edit share token).
+//
+// Therefore direct client-SDK access is denied across the board. If we later expose the
+// Firebase Storage client SDK directly to signed-in owners, scope a narrow allow-rule here.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

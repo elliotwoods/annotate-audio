@@ -4,10 +4,10 @@
 //          view/edit tokens + writes meta.json and the first immutable snapshot.
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { isAdmin } from '@server/auth';
+import { verifyUid } from '@server/auth';
 import { makeToken } from '@server/tokens';
 import { readMeta, writeMeta, metaKey, snapshotKey, type ProjectMeta } from '@server/meta';
-import { getJSON, putJSON, listKeys } from '@server/r2';
+import { getJSON, putJSON, listKeys } from '@server/storage';
 import { parseProject, audioHashOf, MAX_PROJECT_BYTES } from '@server/project';
 import { newSnapId } from '@server/snapId';
 
@@ -15,12 +15,13 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  if (!isAdmin(req)) return NextResponse.json({ error: 'Admin key required.' }, { status: 401 });
+  const uid = await verifyUid(req);
+  if (!uid) return NextResponse.json({ error: 'Sign-in required.' }, { status: 401 });
   try {
     const metaKeys = (await listKeys('projects/')).filter((k) => k.endsWith('/meta.json'));
     const metas = await Promise.all(metaKeys.map((k) => getJSON<ProjectMeta>(k)));
     const projects = metas
-      .filter((m): m is ProjectMeta => !!m)
+      .filter((m): m is ProjectMeta => !!m && m.ownerUid === uid)
       .map((m) => ({ id: m.id, name: m.name, updatedAt: m.updatedAt, createdAt: m.createdAt }))
       .sort((a, b) => b.updatedAt - a.updatedAt);
     return NextResponse.json({ projects });
@@ -30,7 +31,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!isAdmin(req)) return NextResponse.json({ error: 'Admin key required.' }, { status: 401 });
+  const uid = await verifyUid(req);
+  if (!uid) return NextResponse.json({ error: 'Sign-in required.' }, { status: 401 });
   try {
     const body = await req.json().catch(() => null);
     if (sizeOf(body) > MAX_PROJECT_BYTES) {
@@ -50,6 +52,7 @@ export async function POST(req: NextRequest) {
     const meta: ProjectMeta = {
       id: project.id,
       name: project.name,
+      ownerUid: uid,
       audioHash: audioHashOf(project),
       viewToken: makeToken(),
       editToken: makeToken(),

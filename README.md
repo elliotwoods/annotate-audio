@@ -112,9 +112,10 @@ npm run typecheck  # tsc --noEmit
 ## Tech stack
 
 Next.js 14 (App Router) · React 18 · TypeScript (strict) · Zustand (+ zundo for undo) ·
-lucide-react · idb · essentia.js (BPM detection, in a Web Worker) · Web Audio API · Ably
-(live collaboration). The editor is a browser-only client (`app/page.tsx` loads it with
-`ssr: false`); the cloud API lives in App Router route handlers under `app/api/`.
+lucide-react · idb · essentia.js (BPM detection, in a Web Worker) · Web Audio API · Firebase
+(Authentication, Cloud Storage, Realtime Database for live collaboration). The editor is a
+browser-only client (`app/page.tsx` loads it with `ssr: false`); the cloud API lives in App
+Router route handlers under `app/api/`.
 
 ## Architecture
 
@@ -148,62 +149,68 @@ defaults), `store/` (Zustand store + selectors), `audio/` (engine, transport, wo
 Cloud mode lets you **share a link to a set**, **save immutable snapshots** (saves never
 overwrite previous ones), **edit the same set together in real time**, and have the audio
 travel with the link. It's additive — the local autosave still works offline without any of
-this. Storage is **Cloudflare R2**, the API runs as **Next.js route handlers** under
-`app/api/`, and live presence/edits ride **Ably** (auth'd per project token).
+this. It runs entirely on **Firebase**: **Authentication** for sign-in, **Cloud Storage** for
+project JSON + audio, **Realtime Database** for live presence/edits, with the API as **Next.js
+route handlers** under `app/api/`.
 
 **Capability model**
 
-- **Verified user** — holds the `ADMIN_KEY`. Can create new cloud projects and view/edit any
-  set. Paste the key once via *Sign in* in the top bar; it's stored in the browser and keeps
-  you signed in indefinitely.
+- **Signed-in user** — authenticates with **Google** (Firebase Auth). Can create cloud sets and
+  **owns** the ones they create; the library lists only *your* sets. The owner has full
+  view/edit access without needing a share token (the API authorizes them by their Firebase ID
+  token against the set's `ownerUid`).
 - **Private links** — each set has an **edit link** (`/?p=<id>&e=<token>`, open + save) and a
   **view-only link** (`/?p=<id>&v=<token>`, open + play). Links carry secrets — treat them as
-  private. The address bar is kept as a live share link for the current set, so **copying the
-  page URL re-shares it** (with edit privileges when you can edit). For a verified user, a
-  still-local set with real content is **auto-published** the moment it's open, so the page URL
-  always loads *that* set on another computer. Multiple people on the same set see each other's
-  edits live.
+  private; a link holder needs no account. The address bar is kept as a live share link for the
+  current set, so **copying the page URL re-shares it** (with edit privileges when you can edit).
+  For a signed-in owner, a still-local set with real content is **auto-published** the moment
+  it's open, so the page URL always loads *that* set on another computer. Multiple people on the
+  same set see each other's edits live.
 
 **Setup**
 
-1. **Cloudflare R2** — create a private bucket and an R2 API token (access key id + secret).
-   Add a CORS policy allowing `GET` and `PUT` from your app origin so the browser can upload
-   and download audio via presigned URLs:
+1. **Firebase project** — create one on the **Blaze (pay-as-you-go)** plan (required for App
+   Hosting + Cloud Storage). In the console enable **Authentication** (Google provider),
+   **Cloud Storage**, and **Realtime Database**. Add a **Web app** to get the client config.
 
-   ```json
-   [{ "AllowedOrigins": ["https://your-app.vercel.app", "http://localhost:3000"],
-      "AllowedMethods": ["GET", "PUT"], "AllowedHeaders": ["*"] }]
-   ```
+2. **Security rules** — deploy the bundled rules: `firebase deploy --only storage,database`
+   (`storage.rules` locks Storage to server-mediated access; `database.rules.json` gates the
+   realtime channels by the custom-token claims). Set the project id in `.firebaserc` first.
 
-2. **Environment variables** — copy `.env.example` → `.env.local` for local dev (and set the
-   same in your host): `ADMIN_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
-   `R2_BUCKET` (optional `R2_ENDPOINT`). For live collaboration also set `ABLY_API_KEY`
-   (server-only — the browser gets short-lived tokens from `/api/realtime/token`). Without it
-   the app still runs; live editing just stays off.
-
-   Generate the `ADMIN_KEY` (~10 url-safe chars):
+3. **CORS for audio** — the browser uploads/downloads audio directly to the bucket via signed
+   URLs, so the bucket needs a CORS policy for your origins:
 
    ```bash
-   node -e "console.log(require('crypto').randomBytes(8).toString('base64').replace(/[^A-Za-z0-9]/g,'').slice(0,10))"
+   GCS_CORS_ORIGINS="http://localhost:3000,https://your-app.web.app" node scripts/set-gcs-cors.mjs
    ```
 
-3. **Run / deploy** — `npm run dev` serves the app and `/api` together locally.
+4. **Environment variables** — copy `.env.example` → `.env.local` for local dev. Fill the
+   `NEXT_PUBLIC_FIREBASE_*` web config and `STORAGE_BUCKET`. For local Admin SDK access run
+   `gcloud auth application-default login` (or set `GOOGLE_APPLICATION_CREDENTIALS` /
+   `FIREBASE_SERVICE_ACCOUNT`). On App Hosting the runtime service account supplies these
+   automatically. Without the database URL the app still runs; live editing just stays off.
 
-**Storage layout (R2)**
+5. **Run** — `npm run dev` serves the app and `/api` together locally (against your live
+   Firebase project).
+
+**Storage layout (Cloud Storage)**
 
 ```
-projects/{id}/meta.json                  name, audioHash, tokens, latest pointer, timestamps
+projects/{id}/meta.json                  ownerUid, name, audioHash, tokens, latest pointer, timestamps
 projects/{id}/snapshots/{ts}-{rand}.json immutable Project JSON — one per save
 audio/{hash}                             audio blob, deduplicated by content hash
 ```
 
 ## Deployment
 
-It's a standard Next.js app — deploy to **Vercel** (zero-config; the framework is
-auto-detected) or any Node host via `next build` + `next start`. Set the cloud environment
-variables above in the hosting project. To serve under a sub-path, set `basePath` in
-`next.config.mjs`. With no cloud variables set it still deploys and runs as the offline,
-local-only editor.
+Deploy to **Firebase App Hosting** (connect this repo's branch in the Firebase console; it
+builds with `next build` and serves on Cloud Run). Configure environment variables in
+`apphosting.yaml`. The runtime service account provides Admin SDK credentials automatically —
+**but** because it has no private key, V4 signed-URL signing uses the IAM `signBlob` API: grant
+that service account the **Service Account Token Creator** role on itself and enable the **IAM
+Service Account Credentials API**, or audio upload/download will fail. To serve under a sub-path,
+set `basePath` in `next.config.mjs`. With no Firebase config set, the app still deploys and runs
+as the offline, local-only editor.
 
 ## Browser / format support
 

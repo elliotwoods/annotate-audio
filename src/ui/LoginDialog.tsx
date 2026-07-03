@@ -1,10 +1,9 @@
-// Verified-user login: paste the admin key, verify it against the server, and keep it in
-// localStorage so the user stays logged in indefinitely (spec: cloud auth).
+// Sign-in dialog: authenticate with Firebase (Google) so you can create and own cloud sets.
+// Firebase persists the session across reloads, so you stay signed in.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import './StartDialog.css';
-import { verifyKey } from '../persistence/cloud';
-import { setAdminKey, clearAdminKey, getAdminKey } from '../auth/session';
+import { signInWithGoogle, signOutUser, currentUser, onAuthChange } from '../auth/session';
 
 export function LoginDialog({
   open,
@@ -13,22 +12,14 @@ export function LoginDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  /** Called after a successful login or logout so the parent can refresh cloud UI. */
+  /** Called after a successful sign-in or sign-out so the parent can refresh cloud UI. */
   onChange: () => void;
 }) {
-  const [key, setKey] = useState('');
+  const [user, setUser] = useState(() => currentUser());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const verified = !!getAdminKey();
 
-  useEffect(() => {
-    if (open) {
-      setKey('');
-      setError(null);
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
-  }, [open]);
+  useEffect(() => onAuthChange(setUser), []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -40,73 +31,65 @@ export function LoginDialog({
 
   if (!open) return null;
 
-  const submit = async () => {
-    const k = key.trim();
-    if (!k) return;
+  const signIn = async () => {
     setBusy(true);
     setError(null);
     try {
-      const ok = await verifyKey(k);
-      if (!ok) {
-        setError('That key was not accepted.');
-        return;
-      }
-      setAdminKey(k);
+      await signInWithGoogle();
       onChange();
       onClose();
     } catch (err) {
-      setError(`Could not verify: ${(err as Error).message}`);
+      setError(`Could not sign in: ${(err as Error).message}`);
     } finally {
       setBusy(false);
     }
   };
 
-  const logout = () => {
-    clearAdminKey();
-    onChange();
-    onClose();
+  const signOut = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await signOutUser();
+      onChange();
+      onClose();
+    } catch (err) {
+      setError(`Could not sign out: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <div className="dialog-backdrop" onPointerDown={onClose}>
       <div className="dialog" onPointerDown={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
         <div className="dialog-head">
-          <h2>Verified access</h2>
+          <h2>Account</h2>
           <button className="ghost icon" onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>
 
-        {verified ? (
+        {user ? (
           <>
             <p className="muted">
-              You are signed in as a verified user and can create new cloud projects.
+              Signed in as <strong>{user.email ?? user.displayName ?? user.uid}</strong>. You can
+              create cloud sets and they’ll appear in your library on any device.
             </p>
             <div className="dialog-actions">
-              <button onClick={logout}>Sign out</button>
+              <button disabled={busy} onClick={() => void signOut()}>
+                {busy ? 'Signing out…' : 'Sign out'}
+              </button>
             </div>
           </>
         ) : (
           <>
             <p className="muted">
-              Enter your access key to create and manage cloud projects. The key is stored on
-              this device so you stay signed in.
+              Sign in to create and manage your own cloud sets. To open a specific set without an
+              account, use its share link.
             </p>
             <div className="dialog-actions">
-              <input
-                ref={inputRef}
-                type="password"
-                value={key}
-                placeholder="Access key"
-                autoComplete="off"
-                onChange={(e) => setKey(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void submit();
-                }}
-                style={{ flex: 1, minWidth: 0 }}
-              />
-              <button className="primary" disabled={busy || !key.trim()} onClick={() => void submit()}>
-                {busy ? 'Checking…' : 'Sign in'}
+              <button className="primary" disabled={busy} onClick={() => void signIn()}>
+                {busy ? 'Signing in…' : 'Sign in with Google'}
               </button>
             </div>
           </>
