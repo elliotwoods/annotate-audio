@@ -167,50 +167,58 @@ route handlers** under `app/api/`.
   it's open, so the page URL always loads *that* set on another computer. Multiple people on the
   same set see each other's edits live.
 
+Architecture: **object storage = Cloudflare R2**; **auth + realtime = Firebase** (Google
+sign-in, and the Realtime Database for live sync/cursors). See `FIREBASE-SETUP.md` for a
+click-by-click first-time walkthrough.
+
 **Setup**
 
-1. **Firebase project** — create one on the **Blaze (pay-as-you-go)** plan (required for App
-   Hosting + Cloud Storage). In the console enable **Authentication** (Google provider),
-   **Cloud Storage**, and **Realtime Database**. Add a **Web app** to get the client config.
+1. **Firebase project (auth only)** — the **Spark (free)** plan is enough; Auth + Realtime
+   Database are all we use. In the console enable **Authentication → Google** and create a
+   **Realtime Database**. Add a **Web app** to get the client config, and generate a
+   **service-account key** (Project settings → Service accounts) for the server.
 
-2. **Security rules** — deploy the bundled rules: `firebase deploy --only storage,database`
-   (`storage.rules` locks Storage to server-mediated access; `database.rules.json` gates the
-   realtime channels by the custom-token claims). Set the project id in `.firebaserc` first.
+2. **Cloudflare R2 bucket** — create a private bucket for project JSON + audio blobs. Grab the
+   S3 API credentials (account id, access key, secret, bucket, endpoint).
 
-3. **CORS for audio** — the browser uploads/downloads audio directly to the bucket via signed
-   URLs, so the bucket needs a CORS policy for your origins:
+3. **Environment variables** — copy `.env.example` → `.env.local`. Fill the `R2_*` values, the
+   `NEXT_PUBLIC_FIREBASE_*` web config + `NEXT_PUBLIC_FIREBASE_DATABASE_URL`, and
+   `FIREBASE_SERVICE_ACCOUNT` (the whole key JSON, one line). Without the database URL the app
+   still runs; live editing just stays off.
 
-   ```bash
-   GCS_CORS_ORIGINS="http://localhost:3000,https://your-app.web.app" node scripts/set-gcs-cors.mjs
-   ```
+4. **R2 CORS** — the browser uploads/downloads audio directly to R2 via presigned URLs, so the
+   bucket needs a CORS policy for your origins. Via wrangler (recommended):
+   `wrangler r2 bucket cors set <bucket> --file cors.json` (R2 `rules` schema), or the S3-style
+   `scripts/set-r2-cors.mjs` with a bucket-admin token, or the Cloudflare dashboard.
 
-4. **Environment variables** — copy `.env.example` → `.env.local` for local dev. Fill the
-   `NEXT_PUBLIC_FIREBASE_*` web config and `STORAGE_BUCKET`. For local Admin SDK access run
-   `gcloud auth application-default login` (or set `GOOGLE_APPLICATION_CREDENTIALS` /
-   `FIREBASE_SERVICE_ACCOUNT`). On App Hosting the runtime service account supplies these
-   automatically. Without the database URL the app still runs; live editing just stays off.
+5. **Realtime rules** — set the project id in `.firebaserc`, then
+   `firebase deploy --only database` (`database.rules.json` gates the realtime channels by the
+   custom-token claims).
 
-5. **Run** — `npm run dev` serves the app and `/api` together locally (against your live
-   Firebase project).
+6. **Run** — `npm run dev` serves the app and `/api` together locally.
 
-**Storage layout (Cloud Storage)**
+**Access model** — invite-only: bootstrap admins (`ADMIN_EMAILS`, default
+`elliot@kimchiandchips.com`) and any email an admin approves (via the in-app admin panel, stored
+at `admin/allowlist.json` in R2) may create/own sets. Share-link viewing stays open to anyone; an
+edit link is an **invite** — recipients open read-only and become a saved editor once they sign
+in. Legacy sets get an owner via `node scripts/migrate-owner.mjs --email <you>`.
+
+**Storage layout (Cloudflare R2)**
 
 ```
-projects/{id}/meta.json                  ownerUid, name, audioHash, tokens, latest pointer, timestamps
+projects/{id}/meta.json                  ownerUid, editors, name, audioHash, tokens, latest, timestamps
 projects/{id}/snapshots/{ts}-{rand}.json immutable Project JSON — one per save
 audio/{hash}                             audio blob, deduplicated by content hash
+admin/allowlist.json                     approved emails (invite-only access)
 ```
 
 ## Deployment
 
-Deploy to **Firebase App Hosting** (connect this repo's branch in the Firebase console; it
-builds with `next build` and serves on Cloud Run). Configure environment variables in
-`apphosting.yaml`. The runtime service account provides Admin SDK credentials automatically —
-**but** because it has no private key, V4 signed-URL signing uses the IAM `signBlob` API: grant
-that service account the **Service Account Token Creator** role on itself and enable the **IAM
-Service Account Credentials API**, or audio upload/download will fail. To serve under a sub-path,
-set `basePath` in `next.config.mjs`. With no Firebase config set, the app still deploys and runs
-as the offline, local-only editor.
+Deploy to **Vercel** (`vercel --prod`). Set the `R2_*`, `NEXT_PUBLIC_FIREBASE_*`, and
+`FIREBASE_SERVICE_ACCOUNT` env vars in the project (the `NEXT_PUBLIC_*` are read at build time).
+Add your deployed domain to Firebase **Authentication → Settings → Authorized domains** and to the
+R2 CORS origins. With no Firebase config set, the app still deploys and runs as the offline,
+local-only editor.
 
 ## Browser / format support
 
