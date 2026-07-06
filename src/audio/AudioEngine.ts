@@ -26,8 +26,12 @@ export class AudioEngine {
   /** frozen position while paused/stopped. */
   private frozenPosition = 0;
   private rate = 1;
-
-  onEnded: (() => void) | null = null;
+  /**
+   * End of the playable timeline in seconds. Defaults to the audio length but can be
+   * pushed out to the furthest cue end (see Transport.syncPlayEnd) so the playhead can
+   * seek/play through the silent tail past the audio, up to the last cue.
+   */
+  private playEnd = 0;
 
   /** Lazily create the AudioContext (must follow a user gesture in most browsers). */
   private ensureCtx(): AudioContext {
@@ -56,6 +60,19 @@ export class AudioEngine {
 
   get duration(): number {
     return this.buffer?.duration ?? 0;
+  }
+
+  /** End of the playable timeline (>= audio length). */
+  get playbackEnd(): number {
+    return this.playEnd;
+  }
+
+  /**
+   * Extend the playable end to `sec` (the content extent = furthest of audio end and
+   * cue ends). Never shrinks below the audio length — the whole clip is always playable.
+   */
+  setPlayEnd(sec: number): void {
+    this.playEnd = Math.max(sec, this.duration);
   }
 
   get sampleRate(): number {
@@ -88,6 +105,8 @@ export class AudioEngine {
     this.stop();
     this.buffer = buf;
     this.frozenPosition = 0;
+    // Baseline the playable end to the audio; Transport widens it to include stray cues.
+    this.playEnd = buf.duration;
   }
 
   /** Drop the current buffer and reset position — used when switching projects. */
@@ -95,6 +114,7 @@ export class AudioEngine {
     this.stop();
     this.buffer = null;
     this.frozenPosition = 0;
+    this.playEnd = 0;
   }
 
   /** Channel data copies safe to transfer to a worker, plus the sample rate. */
@@ -111,7 +131,9 @@ export class AudioEngine {
   position(): number {
     if (this.playing && this.ctx) {
       const pos = (this.ctx.currentTime - this.startedAtCtxTime) * this.rate + this.startOffset;
-      return Math.min(Math.max(0, pos), this.duration);
+      // Clamp to the playable end (audio ∪ cues), not the buffer end — the clock keeps
+      // advancing through the silent tail after the buffer source has finished.
+      return Math.min(Math.max(0, pos), this.playEnd);
     }
     return this.frozenPosition;
   }
@@ -137,11 +159,11 @@ export class AudioEngine {
     const ctx = this.ensureCtx();
     if (ctx.state === 'suspended') await ctx.resume();
     let startAt = offset ?? this.position();
-    // If we're parked at the natural end and Play is pressed with no explicit offset,
-    // replay from the start rather than starting a zero-length source at duration
-    // (which would immediately fire onended again).
-    if (offset === undefined && startAt >= this.duration - 1e-3) startAt = 0;
-    this.startSource(Math.min(Math.max(0, startAt), this.duration));
+    // If we're parked at the end of the timeline and Play is pressed with no explicit
+    // offset, replay from the start rather than starting at the end (which would stop
+    // again on the next frame).
+    if (offset === undefined && startAt >= this.playEnd - 1e-3) startAt = 0;
+    this.beginPlayback(Math.min(Math.max(0, startAt), this.playEnd));
   }
 
   pause(): void {
@@ -160,33 +182,39 @@ export class AudioEngine {
 
   /** Move the playhead. Restarts the source when playing; just freezes when paused. */
   seek(time: number): void {
-    const t = Math.min(Math.max(0, time), this.duration);
+    const t = Math.min(Math.max(0, time), this.playEnd);
     if (this.playing) {
-      this.startSource(t);
+      this.beginPlayback(t);
     } else {
       this.frozenPosition = t;
     }
   }
 
-  private startSource(offset: number): void {
-    if (!this.buffer || !this.gain || !this.ctx) return;
+  /** Freeze the transport at the end of the timeline (called when the playhead reaches playEnd). */
+  finishAtEnd(): void {
     this.teardownSource();
-    const src = this.ctx.createBufferSource();
-    src.buffer = this.buffer;
-    src.playbackRate.value = this.rate;
-    src.connect(this.gain);
-    src.onended = () => {
-      // Fired by both natural end and our own stop()/restart. Guard: only treat as a
-      // natural end if we're still the live source and have run past the buffer.
-      if (this.source === src && this.playing && this.position() >= this.duration - 0.02) {
-        this.playing = false;
-        this.frozenPosition = this.duration;
-        this.source = null;
-        this.onEnded?.();
-      }
-    };
-    src.start(0, offset);
-    this.source = src;
+    this.playing = false;
+    this.frozenPosition = this.playEnd;
+  }
+
+  private beginPlayback(offset: number): void {
+    if (!this.ctx) return;
+    this.teardownSource();
+    // Only spin up a buffer source within the audio; past the audio end the timeline is
+    // silent (cues only), so we just anchor the clock and let position() advance there.
+    if (this.buffer && this.gain && offset < this.duration - 1e-9) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.buffer;
+      src.playbackRate.value = this.rate;
+      src.connect(this.gain);
+      src.onended = () => {
+        // Buffer finished (or we stopped it). Release the node; the clock keeps running
+        // into the silent tail — end-of-timeline is detected by Transport's rAF loop.
+        if (this.source === src) this.source = null;
+      };
+      src.start(0, offset);
+      this.source = src;
+    }
     this.startedAtCtxTime = this.ctx.currentTime;
     this.startOffset = offset;
     this.playing = true;

@@ -8,6 +8,7 @@
 import { AudioEngine } from './AudioEngine';
 import { useStore } from '../store/store';
 import { timeToX } from '../core/transform';
+import { contentDuration } from '../core/contentExtent';
 import { nextBar, prevBar } from '../core/grid';
 
 export type TickListener = (pos: number, playing: boolean) => void;
@@ -23,15 +24,6 @@ class Transport {
   private raf = 0;
   /** Desired output gain (0 = muted). Tracked here so it survives audio (re)loads. */
   private gainValue = 1;
-
-  constructor() {
-    this.engine.onEnded = () => {
-      // Natural end → reflect stopped state at the end position.
-      useStore.getState().setPlayback({ isPlaying: false, positionSec: this.engine.duration });
-      this.stopLoop();
-      this.notify();
-    };
-  }
 
   // ── subscriptions ────────────────────────────────────────────────────────
   onTick(cb: TickListener): () => void {
@@ -62,7 +54,30 @@ class Transport {
   }
 
   // ── clock ──────────────────────────────────────────────────────────────────
+  /**
+   * Push the engine's playable end out to the current content extent (audio ∪ cues) so
+   * playback/seek can reach stray cues past the audio. Cheap enough to call per frame,
+   * which keeps the end live as cues are added/removed mid-playback. Returns the extent.
+   */
+  private syncPlayEnd(): number {
+    const { core } = useStore.getState();
+    const end = contentDuration(core.audio, core.blocks);
+    this.engine.setPlayEnd(end);
+    return end;
+  }
+
   private loop = (): void => {
+    this.syncPlayEnd();
+    // Reached the end of the timeline (audio end, or the last cue's end in the silent
+    // tail) → stop like a natural end. The buffer's own onended no longer stops us, so
+    // this rAF check is the single end detector for both the audio and the tail.
+    if (this.engine.isPlaying && this.engine.position() >= this.engine.playbackEnd - 1e-3) {
+      this.engine.finishAtEnd();
+      useStore.getState().setPlayback({ isPlaying: false, positionSec: this.engine.playbackEnd });
+      this.stopLoop();
+      this.notify();
+      return;
+    }
     this.applyFollow();
     this.notify();
     if (this.engine.isPlaying) {
@@ -91,6 +106,7 @@ class Transport {
     // Re-apply the desired gain: the GainNode is (re)created on each audio load and defaults
     // to full volume, so a mute chosen before/while loading must be reasserted here.
     this.engine.setGain(this.gainValue);
+    this.syncPlayEnd();
     await this.engine.play();
     useStore.getState().setPlayback({ isPlaying: true, positionSec: this.position() });
     this.startLoop();
@@ -121,6 +137,7 @@ class Transport {
 
   /** Free seek (no snap) — spec §8.2/§11: clicking ruler/waveform. */
   seek(time: number): void {
+    this.syncPlayEnd();
     this.engine.seek(time);
     useStore.getState().setPlayback({ positionSec: this.position() });
     this.notify();
@@ -144,7 +161,8 @@ class Transport {
     const { core } = useStore.getState();
     const cur = this.position();
     const target = dir > 0 ? nextBar(cur, core.grid) : prevBar(cur, core.grid);
-    this.seek(clamp(target, 0, this.engine.duration || target));
+    const end = this.syncPlayEnd();
+    this.seek(clamp(target, 0, end || target));
   }
 
   jumpSection(dir: -1 | 1): void {
@@ -164,7 +182,8 @@ class Transport {
     this.seek(0);
   }
   jumpEnd(): void {
-    this.seek(this.engine.duration);
+    // Jump to the end of the content (last cue end, or audio end if no cues extend past it).
+    this.seek(this.syncPlayEnd());
   }
 
   // ── follow-playhead auto-scroll ──────────────────────────────────────────────
